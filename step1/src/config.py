@@ -40,3 +40,4 @@ REPORT_OUTPUT_DIR: Optional[str] = get_config("REPORT_OUTPUT_DIR")
 
 DEBUG: bool = get_config("DEBUG", "0") == "1"
 LOG_LEVEL: str = get_config("LOG_LEVEL", "INFO")  # type: ignore[assignment]
+MAX_LOG_LINES: int = int(get_config("MAX_LOG_LINES", "2000") or "2000")

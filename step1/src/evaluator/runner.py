@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-from utils.logger import get_logger
+from utils.logger import get_logger, log_run_start, log_sample_start, trim_if_needed
 from .result import EvaluationResult
 
 logger = get_logger("evaluator.runner")
@@ -13,8 +13,10 @@ def run(dataset, metrics) -> EvaluationResult:
     metric_names = [m.name for m in metrics]
     totals = {name: 0.0 for name in metric_names}
 
+    log_run_start(total=len(dataset))
+
     for idx, sample in enumerate(dataset, start=1):
-        logger.info("评估进度 %d/%d, task_id=%s", idx, len(dataset), sample.task_id)
+        log_sample_start(sample.task_id, idx=idx, total=len(dataset))
         row = {"task_id": sample.task_id}
         for metric in metrics:
             result = metric.score(sample)
@@ -34,6 +36,10 @@ def run(dataset, metrics) -> EvaluationResult:
     logger.info("评估完成，共 %d 个样本", count)
     for name, avg in summary.items():
         logger.info("总体均值: %s = %.4f", name, avg)
+
+    # 运行结束后裁剪日志文件
+    trim_if_needed()
+
     return EvaluationResult(samples=samples_out, summary=summary)
 
 
