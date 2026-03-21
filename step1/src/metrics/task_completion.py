@@ -1,24 +1,15 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import List, Optional
 
 try:
-    from zai import ZhipuAiClient  # type: ignore
-except Exception:
-    ZhipuAiClient = None
+    from openai import OpenAI  # type: ignore
+except ImportError:
+    OpenAI = None  # type: ignore
 
+from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
 from .base import Metric, MetricResult
-
-
-def _get_env(name: str) -> Optional[str]:
-    """读取环境变量，优先读取课程项目自定义前缀，其次兼容旧变量名。"""
-
-    prefixed = os.getenv(f"Software3_1_{name}")
-    if prefixed:
-        return prefixed
-    return os.getenv(name)
 
 
 class TaskCompletion(Metric):
@@ -34,17 +25,20 @@ class TaskCompletion(Metric):
         return MetricResult(value=score, reason="任务完成度(规则版)", traces={"matched": matched})
 
     def _call_llm(self, prompt: str) -> Optional[str]:
-        api_key = _get_env("LLM_API_KEY")
-        model = _get_env("LLM_MODEL") or "glm-4.7-flash"
+        api_key = LLM_API_KEY
+        model = LLM_MODEL
         if not api_key:
-            print("[task_completion] 缺少 API Key", flush=True)
+            print("[task_completion] 缺少 LLM_API_KEY，请在 .env 中配置", flush=True)
             return None
-        if ZhipuAiClient is None:
-            print("[task_completion] 未安装 zai-sdk", flush=True)
+        if OpenAI is None:
+            print("[task_completion] 未安装 openai 包，请 pip install openai", flush=True)
             return None
 
         try:
-            client = ZhipuAiClient(api_key=api_key, timeout=30, max_retries=1)
+            client_kwargs = {"api_key": api_key, "timeout": 30, "max_retries": 1}
+            if LLM_BASE_URL:
+                client_kwargs["base_url"] = LLM_BASE_URL
+            client = OpenAI(**client_kwargs)
             response = client.chat.completions.create(
                 model=model,
                 messages=[
