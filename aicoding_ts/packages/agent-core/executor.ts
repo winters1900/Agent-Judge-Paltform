@@ -1,12 +1,8 @@
 import type { LlmClient } from '../llm-client/index.ts';
+import type { McpToolClient } from './mcp-client.ts';
 
 type ToolGateway = {
-  readFile: (path: string) => unknown;
-  writeFile: (path: string, content: string) => unknown;
-  runCommand: (command: string) => unknown;
-  listWorkspace: () => unknown;
-  searchInWorkspace: (query: string, path?: string) => unknown;
-  patchFile: (path: string, patch: string) => unknown;
+  mcp: McpToolClient;
 };
 
 function extractTextFromMessage(message: any): string {
@@ -33,92 +29,25 @@ function toolSummary(result: unknown): string {
 }
 
 export function createExecutor(toolGateway: ToolGateway) {
-  const tools: Record<string, (args: any) => unknown> = {
-    read_file: ({ path }) => toolGateway.readFile(path),
-    write_file: ({ path, content }) => toolGateway.writeFile(path, content),
-    run_command: ({ command }) => toolGateway.runCommand(command),
-    list_workspace: () => toolGateway.listWorkspace(),
-    search_in_workspace: ({ query, path }) => toolGateway.searchInWorkspace(query, path),
-    patch_file: ({ path, patch }) => toolGateway.patchFile(path, patch),
+  const tools: Record<string, (args: any) => Promise<unknown>> = {
+    read_file: ({ path }) => toolGateway.mcp.callTool('read_file', { path }).then((result: { data?: unknown }) => result.data),
+    write_file: ({ path, content }) => toolGateway.mcp.callTool('write_file', { path, content }).then((result: { data?: unknown }) => result.data),
+    run_command: ({ command }) => toolGateway.mcp.callTool('run_command', { command }).then((result: { data?: unknown }) => result.data),
+    list_workspace: () => toolGateway.mcp.callTool('list_workspace', {}).then((result: { data?: unknown }) => result.data),
+    search_in_workspace: ({ query, path }) => toolGateway.mcp.callTool('search_in_workspace', { query, path }).then((result: { data?: unknown }) => result.data),
+    patch_file: ({ path, patch }) => toolGateway.mcp.callTool('patch_file', { path, patch }).then((result: { data?: unknown }) => result.data),
   };
 
   return {
     async runModel(llmClient: LlmClient, messages: unknown[], onChunk?: (chunk: unknown) => void) {
       const result = await llmClient.createMessage(messages, {
         tools: [
-          {
-            type: 'function',
-            function: {
-              name: 'read_file',
-              description: '读取工作区中的文件内容',
-              parameters: {
-                type: 'object',
-                properties: { path: { type: 'string' } },
-                required: ['path'],
-                additionalProperties: false,
-              },
-            },
-          },
-          {
-            type: 'function',
-            function: {
-              name: 'write_file',
-              description: '写入工作区中的文件内容',
-              parameters: {
-                type: 'object',
-                properties: { path: { type: 'string' }, content: { type: 'string' } },
-                required: ['path', 'content'],
-                additionalProperties: false,
-              },
-            },
-          },
-          {
-            type: 'function',
-            function: {
-              name: 'patch_file',
-              description: '根据局部补丁修改工作区中的文件',
-              parameters: {
-                type: 'object',
-                properties: { path: { type: 'string' }, patch: { type: 'string' } },
-                required: ['path', 'patch'],
-                additionalProperties: false,
-              },
-            },
-          },
-          {
-            type: 'function',
-            function: {
-              name: 'search_in_workspace',
-              description: '在工作区中搜索文本或代码片段',
-              parameters: {
-                type: 'object',
-                properties: { query: { type: 'string' }, path: { type: 'string' } },
-                required: ['query'],
-                additionalProperties: false,
-              },
-            },
-          },
-          {
-            type: 'function',
-            function: {
-              name: 'run_command',
-              description: '在工作区目录中执行命令',
-              parameters: {
-                type: 'object',
-                properties: { command: { type: 'string' } },
-                required: ['command'],
-                additionalProperties: false,
-              },
-            },
-          },
-          {
-            type: 'function',
-            function: {
-              name: 'list_workspace',
-              description: '列出当前工作区文件树',
-              parameters: { type: 'object', properties: {}, additionalProperties: false },
-            },
-          },
+          { type: 'function', function: { name: 'read_file', description: '读取工作区中的文件内容', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false } } },
+          { type: 'function', function: { name: 'write_file', description: '写入工作区中的文件内容', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'], additionalProperties: false } } },
+          { type: 'function', function: { name: 'patch_file', description: '根据局部补丁修改工作区中的文件', parameters: { type: 'object', properties: { path: { type: 'string' }, patch: { type: 'string' } }, required: ['path', 'patch'], additionalProperties: false } } },
+          { type: 'function', function: { name: 'search_in_workspace', description: '在工作区中搜索文本或代码片段', parameters: { type: 'object', properties: { query: { type: 'string' }, path: { type: 'string' } }, required: ['query'], additionalProperties: false } } },
+          { type: 'function', function: { name: 'run_command', description: '在工作区目录中执行命令', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'], additionalProperties: false } } },
+          { type: 'function', function: { name: 'list_workspace', description: '列出当前工作区文件树', parameters: { type: 'object', properties: {}, additionalProperties: false } } },
         ],
         tool_choice: 'auto',
         parallel_tool_calls: true,

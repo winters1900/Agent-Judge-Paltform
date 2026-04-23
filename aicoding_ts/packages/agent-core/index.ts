@@ -4,6 +4,7 @@ import { createPlanner } from './planner.ts';
 import { createExecutor } from './executor.ts';
 import { createReviewer } from './reviewer.ts';
 import { createSummarizer } from './summarizer.ts';
+import { createMcpClient } from './mcp-client.ts';
 
 type Context = {
   prompt: string;
@@ -24,14 +25,6 @@ type TaskState = {
   summary: string;
 };
 
-type ToolGateway = {
-  readFile: (path: string) => unknown;
-  writeFile: (path: string, content: string) => unknown;
-  runCommand: (command: string) => unknown;
-  listWorkspace: () => unknown[];
-  searchInWorkspace: (query: string, path?: string) => unknown[];
-  patchFile: (path: string, patch: string) => unknown;
-};
 
 type ExecutorResult = {
   result: unknown;
@@ -93,7 +86,7 @@ function recordPhase(taskState: TaskState, phase: string, note = '') {
   taskState.phases.push({ phase, note, at: new Date().toISOString() });
 }
 
-export function createAgentCore(contextBuilder: { buildForPrompt: (prompt: string, selectedFile?: string | null) => Context }, toolGateway: ToolGateway, llmClient: LlmClient) {
+export function createAgentCore(contextBuilder: { buildForPrompt: (prompt: string, selectedFile?: string | null) => Context }, toolGateway: { mcp: ReturnType<typeof createMcpClient> }, llmClient: LlmClient) {
   const planner = createPlanner();
   const executor = createExecutor(toolGateway);
   const reviewer = createReviewer();
@@ -148,16 +141,12 @@ export function createAgentCore(contextBuilder: { buildForPrompt: (prompt: strin
       });
     },
 
-    readFile(path: string) {
-      return toolGateway.readFile(path);
-    },
-
     async writeFile(path: string, content: string) {
-      return toolGateway.writeFile(path, content);
+      return toolGateway.mcp.callTool('write_file', { path, content });
     },
 
     async runCommand(command: string) {
-      return toolGateway.runCommand(command);
+      return toolGateway.mcp.callTool('run_command', { command });
     },
   };
 }

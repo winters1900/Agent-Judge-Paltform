@@ -1,11 +1,12 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFile } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { createServer, type IncomingMessage, type ServerResponse } from 'http';
+import { promises as fs } from 'fs';
+import { extname, join } from 'path';
 import { createAgentCore } from '../../packages/agent-core/index.ts';
 import { createContextBuilder } from '../../packages/context-builder/index.ts';
 import { createLlmClient } from '../../packages/llm-client/index.ts';
 import { createToolGateway } from '../../packages/tool-gateway/index.ts';
 import { createWorkspaceManager } from '../../packages/workspace-manager/index.ts';
+import type { McpJsonRpcRequest } from '../../packages/mcp-server/index.ts';
 
 type RequestContext = {
   path?: string;
@@ -23,13 +24,6 @@ type WorkspaceFile = {
 
 type WorkspaceTreeResponse = {
   tree: unknown[];
-};
-
-type FileUpdateResponse = {
-  ok: true;
-  file: WorkspaceFile;
-  tree: unknown[];
-  action: string;
 };
 
 type PreviewEvent =
@@ -67,7 +61,13 @@ function sendJson(res: ServerResponse, statusCode: number, data: unknown) {
 
 async function parseBody<T extends RequestContext>(req: IncomingMessage): Promise<T> {
   let body = '';
-  for await (const chunk of req) body += chunk;
+  await new Promise<void>((resolve, reject) => {
+    req.on('data', (chunk) => {
+      body += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    });
+    req.on('end', () => resolve());
+    req.on('error', (error) => reject(error));
+  });
   return (body ? JSON.parse(body) : {}) as T;
 }
 
@@ -75,7 +75,7 @@ const workspaceManager: WorkspaceManager = createWorkspaceManager();
 const toolGateway: ToolGateway = createToolGateway(workspaceManager);
 const contextBuilder = createContextBuilder(toolGateway);
 const llmClient = createLlmClient();
-const agentCore: AgentCore = createAgentCore(contextBuilder, toolGateway, llmClient);
+const agentCore: AgentCore = createAgentCore(contextBuilder, { mcp: toolGateway.mcp }, llmClient);
 
 await workspaceManager.loadFromDisk();
 
@@ -83,7 +83,7 @@ async function tryReadStaticFile(pathname: string) {
   const candidates = [join(webDistRoot, pathname), join(webRoot, pathname)];
   for (const candidate of candidates) {
     try {
-      return await readFile(candidate);
+      return await fs.readFile(candidate, 'utf8');
     } catch {
       continue;
     }
@@ -102,9 +102,36 @@ function isPreviewEvent(value: unknown): value is PreviewEvent {
   return 'type' in value;
 }
 
+function sendMcpSse(res: ServerResponse, event: string, data: unknown) {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
 export function startRuntimeServer() {
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url || '/', `http://${req.headers.host}`);
+
+    if (url.pathname === '/mcp' && req.method === 'GET') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+      });
+      sendMcpSse(res, 'ready', { ok: true, serverInfo: { name: 'ai-coding-agent-mcp', version: '0.1.0' } });
+      return;
+    }
+
+    if (url.pathname === '/mcp' && req.method === 'POST') {
+      const parsed = await parseBody<RequestContext & McpJsonRpcRequest>(req);
+      const response = await toolGateway.mcp.jsonRpc(parsed);
+      if (response === null) {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      sendJson(res, 200, response);
+      return;
+    }
 
     if (url.pathname === '/api/meta') {
       sendJson(res, 200, {
@@ -121,9 +148,47 @@ export function startRuntimeServer() {
       return;
     }
 
+    if (url.pathname === '/api/mcp/tools') {
+      sendJson(res, 200, toolGateway.mcp.listTools());
+      return;
+    }
+
+    if (url.pathname === '/api/mcp/resources') {
+      sendJson(res, 200, toolGateway.mcp.listResources());
+      return;
+    }
+
+    if (url.pathname === '/api/mcp/prompts') {
+      sendJson(res, 200, toolGateway.mcp.listPrompts());
+      return;
+    }
+
+    if (url.pathname.startsWith('/api/mcp/tool/') && req.method === 'POST') {
+      const name = decodeURIComponent(url.pathname.replace('/api/mcp/tool/', ''));
+      const parsed = await parseBody<RequestContext>(req);
+      const result = await toolGateway.mcp.callTool(name, parsed as Record<string, unknown>);
+      sendJson(res, result.success ? 200 : 400, result);
+      return;
+    }
+
+    if (url.pathname.startsWith('/api/mcp/resource/') && req.method === 'GET') {
+      const name = decodeURIComponent(url.pathname.replace('/api/mcp/resource/', ''));
+      const result = await toolGateway.mcp.readResource(name);
+      sendJson(res, result.success ? 200 : 404, result);
+      return;
+    }
+
+    if (url.pathname.startsWith('/api/mcp/prompt/') && req.method === 'POST') {
+      const name = decodeURIComponent(url.pathname.replace('/api/mcp/prompt/', ''));
+      const parsed = await parseBody<RequestContext>(req);
+      const result = await toolGateway.mcp.getPrompt(name, parsed as Record<string, unknown>);
+      sendJson(res, result.success ? 200 : 400, result);
+      return;
+    }
+
     if (url.pathname.startsWith('/api/file/') && req.method === 'GET') {
       const filePath = decodeURIComponent(url.pathname.replace('/api/file/', ''));
-      const file = toolGateway.readFile(filePath) as WorkspaceFile | null;
+      const file = toolGateway.readFile(filePath);
       if (!isWorkspaceFile(file)) {
         sendJson(res, 404, { error: 'File not found' });
         return;
@@ -134,8 +199,17 @@ export function startRuntimeServer() {
 
     if (url.pathname === '/api/file' && req.method === 'PUT') {
       const parsed = await parseBody<RequestContext>(req);
-      const updated = (await agentCore.writeFile(parsed.path ?? '', parsed.content ?? '')) as FileUpdateResponse;
-      sendJson(res, 200, { ok: true, file: updated.file, tree: updated.tree, action: updated.action });
+      const updated = await toolGateway.mcp.callTool('write_file', {
+        path: parsed.path ?? '',
+        content: parsed.content ?? '',
+      });
+
+      if (!updated.success || !updated.data || typeof updated.data !== 'object') {
+        sendJson(res, 400, updated);
+        return;
+      }
+
+      sendJson(res, 200, { ok: true, ...(updated.data as Record<string, unknown>) });
       return;
     }
 
