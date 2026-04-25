@@ -10,7 +10,21 @@
 ## 2026-04-25
 
 ### Added
-- `apps/runtime/server.ts`：新增会话和 chat API
+- `apps/web/index.html`：topbar 新增会话 ID 徽章（`#sessionBadge`）、状态徽章（`#agentStatusBadge`）、新建会话按钮
+- `apps/web/app.ts`：
+  - `initSession()` — 页面加载时恢复会话 ID 和历史任务摘要
+  - `streamChat()` — 替代 `streamPreview()`，调用 `/api/agent/chat`，携带 sessionId，处理新事件类型
+  - `renderConfirmCard()` — 渲染 agent confirm 卡片（支持选项按钮 / 自由输入）
+  - `submitConfirm()` — POST /api/agent/confirm，卡片变为已响应状态
+  - `createNewSession()` — 弹确认框 → POST /api/session → 清空 chatLog
+  - `setAgentStatus()` — 联动状态徽章和输入禁用
+- `apps/web/styles.css`：confirm-card、session-badge、agent-status-badge、topbar-right 样式
+- `apps/web/tsconfig.build.json`：build 专用 tsconfig（不含 `allowImportingTsExtensions`，启用 emit）
+
+### Changed
+- `package.json`：`build:web` / `dev:web` 改用 `tsconfig.build.json`
+
+
   - `GET /api/session` — 返回当前会话 sessionId、messageCount、taskSummaries
   - `POST /api/session` — 创建新会话，更新 current.json
   - `POST /api/agent/chat` — 主要 agent 接口（SSE），调用 `runTask()`，携带 sessionId

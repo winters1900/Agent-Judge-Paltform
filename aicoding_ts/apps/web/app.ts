@@ -9,6 +9,9 @@ const refreshBtn = document.querySelector<HTMLButtonElement>('#refreshBtn')!;
 const workspaceLayout = document.querySelector<HTMLElement>('#workspaceLayout')!;
 const newItemBtn = document.querySelector<HTMLButtonElement>('#newItemBtn')!;
 const newItemMenu = document.querySelector<HTMLElement>('#newItemMenu');
+const sessionBadge = document.querySelector<HTMLElement>('#sessionBadge')!;
+const agentStatusBadge = document.querySelector<HTMLElement>('#agentStatusBadge')!;
+const newSessionBtn = document.querySelector<HTMLButtonElement>('#newSessionBtn')!;
 
 type WorkspaceNode = {
   id: string;
@@ -32,12 +35,16 @@ type PreviewResult = {
   data?: { toolResults?: Array<{ name: string; result?: { ok?: boolean; file?: unknown } }> };
 };
 
+type AgentStatusState = 'idle' | 'running' | 'waiting_confirm';
+
 let selectedFile: string | null = null;
 let currentFileContent = '';
 let workspaceCache: WorkspaceNode[] = [];
 let currentAutoRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let editorSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let expandedFolders = new Set<string>();
+let currentSessionId: string | null = null;
+let agentStatus: AgentStatusState = 'idle';
 
 const layoutState = {
   chat: 34,
@@ -153,6 +160,20 @@ function persistExpandedFolders() {
   localStorage.setItem('expandedFolders', JSON.stringify([...expandedFolders]));
 }
 
+function setAgentStatus(status: AgentStatusState) {
+  agentStatus = status;
+  agentStatusBadge.dataset.status = status;
+  const labels: Record<AgentStatusState, string> = {
+    idle: '空闲',
+    running: '运行中',
+    waiting_confirm: '等待确认',
+  };
+  agentStatusBadge.textContent = labels[status];
+  const submitBtn = chatForm.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  submitBtn.disabled = status !== 'idle';
+  promptInput.disabled = status !== 'idle';
+}
+
 function appendMessage(role: string, text: string) {
   const div = document.createElement('div');
   div.className = `message ${role}`;
@@ -160,6 +181,64 @@ function appendMessage(role: string, text: string) {
   chatLog.appendChild(div);
   chatLog.scrollTop = chatLog.scrollHeight;
   return div;
+}
+
+function renderConfirmCard(event: { confirmId: string; question: string; options?: string[] }) {
+  const card = document.createElement('div');
+  card.className = 'confirm-card';
+  card.dataset.confirmId = event.confirmId;
+
+  const questionEl = document.createElement('p');
+  questionEl.className = 'confirm-question';
+  questionEl.textContent = event.question;
+  card.appendChild(questionEl);
+
+  const actionsEl = document.createElement('div');
+  actionsEl.className = 'confirm-actions';
+
+  if (event.options && event.options.length > 0) {
+    event.options.forEach((opt) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'confirm-option-btn';
+      btn.textContent = opt;
+      btn.addEventListener('click', () => submitConfirm(event.confirmId, opt, card));
+      actionsEl.appendChild(btn);
+    });
+  } else {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = '输入回答…';
+    input.className = 'confirm-input';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'confirm-submit-btn';
+    btn.textContent = '提交';
+    btn.addEventListener('click', () => submitConfirm(event.confirmId, input.value, card));
+    actionsEl.appendChild(input);
+    actionsEl.appendChild(btn);
+  }
+
+  card.appendChild(actionsEl);
+  chatLog.appendChild(card);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+async function submitConfirm(confirmId: string, answer: string, card: HTMLElement) {
+  try {
+    await fetch('/api/agent/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmId, answer }),
+    });
+    card.classList.add('confirm-resolved');
+    const actionsEl = card.querySelector('.confirm-actions');
+    if (actionsEl) {
+      actionsEl.innerHTML = `<span class="confirm-answer">已回答：${answer}</span>`;
+    }
+  } catch {
+    appendMessage('agent', `提交确认失败`);
+  }
 }
 
 function isFolder(node: WorkspaceNode) {
@@ -550,11 +629,45 @@ function updateTreeEmptyState() {
   if (emptyState) emptyState.remove();
 }
 
-async function streamPreview(prompt: string) {
-  const response = await fetch('/api/agent/preview', {
+async function initSession() {
+  try {
+    const res = await fetch('/api/session');
+    const data = await res.json() as { sessionId: string; taskSummaries?: Array<{ prompt: string; summary: string }> };
+    currentSessionId = data.sessionId;
+    const shortId = data.sessionId.replace('session-', '').slice(-6);
+    sessionBadge.textContent = `会话 #${shortId}`;
+
+    if (data.taskSummaries && data.taskSummaries.length > 0) {
+      appendMessage('agent', `恢复会话 — 历史任务 ${data.taskSummaries.length} 条。最近：${data.taskSummaries[data.taskSummaries.length - 1].prompt}`);
+    }
+  } catch {
+    sessionBadge.textContent = '会话加载失败';
+  }
+}
+
+async function createNewSession() {
+  const confirmed = await showConfirmDialog({
+    title: '新建会话',
+    message: '新建会话将清空当前聊天记录（历史任务摘要会保留在新会话的记忆中）。确定继续？',
+    confirmLabel: '新建',
+    danger: false,
+  });
+  if (!confirmed) return;
+
+  const res = await fetch('/api/session', { method: 'POST' });
+  const data = await res.json() as { sessionId: string };
+  currentSessionId = data.sessionId;
+  const shortId = data.sessionId.replace('session-', '').slice(-6);
+  sessionBadge.textContent = `会话 #${shortId}`;
+  chatLog.innerHTML = '';
+  appendMessage('agent', `新会话已创建（#${shortId}）`);
+}
+
+async function streamChat(prompt: string) {
+  const response = await fetch('/api/agent/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, selectedFile }),
+    body: JSON.stringify({ prompt, selectedFile, sessionId: currentSessionId }),
   });
 
   if (!response.ok || !response.body) {
@@ -627,20 +740,49 @@ async function streamPreview(prompt: string) {
       if (payload === '[DONE]') continue;
 
       try {
-        const event = JSON.parse(payload) as ToolEvent | { type: 'chunk'; chunk: string } | { type: 'result'; result: PreviewResult } | { type: 'error'; message: string };
+        const event = JSON.parse(payload) as
+          | ToolEvent
+          | { type: 'chunk'; chunk: string }
+          | { type: 'result'; result: PreviewResult }
+          | { type: 'error'; message: string }
+          | { type: 'session'; sessionId: string }
+          | { type: 'task_status'; taskId: string; status: string }
+          | { type: 'confirm_request'; confirmId: string; question: string; options?: string[] };
+
         if (event.type === 'chunk') {
           updateAssistant((assistantMessage.textContent || '') + event.chunk);
         } else if (event.type === 'tool') {
           appendToolDetail(`${event.summary || '工具调用结果'}\n\n${event.detail || ''}`);
         } else if (event.type === 'result') {
-          finalResult = event.result;
+          finalResult = event.result as PreviewResult;
           const toolResults = finalResult?.toolResults ?? finalResult?.data?.toolResults ?? [];
           sawWriteFileSuccess = toolResults.some((item) => item?.name === 'write_file' && item?.result?.ok);
           if (sawWriteFileSuccess) {
             scheduleWorkspaceRefresh(100);
           }
+          setAgentStatus('idle');
         } else if (event.type === 'error') {
           updateAssistant(`出错了：${event.message}`);
+          setAgentStatus('idle');
+        } else if (event.type === 'session') {
+          currentSessionId = event.sessionId;
+          const shortId = event.sessionId.replace('session-', '').slice(-6);
+          sessionBadge.textContent = `会话 #${shortId}`;
+        } else if (event.type === 'task_status') {
+          const statusMap: Record<string, AgentStatusState> = {
+            planning: 'running',
+            executing: 'running',
+            summarizing: 'running',
+            waiting_confirm: 'waiting_confirm',
+            done: 'idle',
+            error: 'idle',
+          };
+          if (statusMap[event.status]) {
+            setAgentStatus(statusMap[event.status] as AgentStatusState);
+          }
+        } else if (event.type === 'confirm_request') {
+          setAgentStatus('waiting_confirm');
+          renderConfirmCard(event);
         }
       } catch {
         continue;
@@ -661,20 +803,22 @@ editor.addEventListener('blur', saveCurrentFile);
 chatForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const prompt = promptInput.value.trim();
-  if (!prompt) return;
+  if (!prompt || agentStatus !== 'idle') return;
 
   appendMessage('user', prompt);
   promptInput.value = '';
-  appendMessage('agent', '正在分析需求并生成执行计划…');
+  setAgentStatus('running');
 
   try {
-    const result = await streamPreview(prompt);
+    const result = await streamChat(prompt);
     summary.textContent = JSON.stringify(result, null, 2);
   } catch (error) {
     appendMessage('agent', `请求失败：${(error as Error).message}`);
+    setAgentStatus('idle');
   }
 });
 
+newSessionBtn.addEventListener('click', createNewSession);
 refreshBtn.addEventListener('click', loadWorkspace);
 newItemBtn.addEventListener('click', (event) => {
   event.stopPropagation();
@@ -696,4 +840,5 @@ applyLayoutWidths();
 initResizers();
 loadExpandedFolders();
 loadWorkspace();
+initSession();
 appendMessage('agent', 'MVP 已启动：你可以先浏览文件树，再输入一个需求开始。');

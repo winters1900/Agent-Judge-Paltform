@@ -6,10 +6,12 @@
 
 ## 待做
 
-- [ ] **Step 5**：前端改造
-  - `apps/web/index.html`：新建会话按钮、会话 ID 显示
-  - `apps/web/app.ts`：`streamChat()`、`initSession()`、`renderConfirmCard()`、`submitConfirm()`、`createNewSession()`
-  - `apps/web/styles.css`：confirm-card 等新样式
+- [x] **Step 5**：前端改造（2026-04-25）
+  - `apps/web/index.html`：topbar 新增会话 ID 徽章、状态徽章、新建会话按钮
+  - `apps/web/app.ts`：`streamChat()`、`initSession()`、`renderConfirmCard()`、`submitConfirm()`、`createNewSession()`、`setAgentStatus()`
+  - `apps/web/styles.css`：confirm-card、session-badge、agent-status-badge 样式
+  - `apps/web/tsconfig.build.json`：新建 build 专用 tsconfig（启用 emit）
+  - `package.json`：`build:web` 改用 tsconfig.build.json
 
 - [ ] **Step 6**：E2E 确认流程验证
   - 触发 `ask_user` → 确认卡片出现 → 用户响应 → loop 继续 → 任务完成

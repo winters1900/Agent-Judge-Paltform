@@ -13,7 +13,12 @@
           <p class="eyebrow">Agent First Workspace</p>
           <h1>AI Coding Agent Web MVP</h1>
         </div>
-        <div class="status-pill">运行中 · Runtime + Web</div>
+        <div class="topbar-right">
+          <span id="sessionBadge" class="session-badge">会话加载中…</span>
+          <span id="agentStatusBadge" class="agent-status-badge" data-status="idle">空闲</span>
+          <button id="newSessionBtn" type="button">新建会话</button>
+          <div class="status-pill">运行中 · Runtime + Web</div>
+        </div>
       </header>
 
       <main id="workspaceLayout" class="workspace-layout">
