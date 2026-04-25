@@ -9,6 +9,10 @@
 
 ## 2026-04-25
 
+### Fixed
+- `apps/web/app.ts`：修复 `write_file` 调用后工作区文件树不自动刷新的问题（改为监听 `tool` 事件中的 `write_file` 而非依赖 result 的 toolResults 字段）
+
+
 ### Added
 - `apps/web/index.html`：topbar 新增会话 ID 徽章（`#sessionBadge`）、状态徽章（`#agentStatusBadge`）、新建会话按钮
 - `apps/web/app.ts`：

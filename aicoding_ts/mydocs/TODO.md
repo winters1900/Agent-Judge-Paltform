@@ -13,9 +13,10 @@
   - `apps/web/tsconfig.build.json`：新建 build 专用 tsconfig（启用 emit）
   - `package.json`：`build:web` 改用 tsconfig.build.json
 
-- [ ] **Step 6**：E2E 确认流程验证
-  - 触发 `ask_user` → 确认卡片出现 → 用户响应 → loop 继续 → 任务完成
-  - 刷新页面后会话 ID 和 taskSummaries 恢复
+- [x] **Step 6**：E2E 确认流程验证（2026-04-25）
+  - 触发 `ask_user` → 确认卡片出现、输入框禁用 → 用户点击选项 → loop 继续 → 任务完成
+  - 刷新页面后会话 ID 和 taskSummaries 恢复（历史任务 5 条）
+  - 修复 `write_file` 后工作区文件树不自动刷新的 bug
 
 ## 已完成
 
