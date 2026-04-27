@@ -7,6 +7,17 @@
 
 ---
 
+## 2026-04-27（二）
+
+### Added
+- `apps/web/app.ts`：`promptInput` Enter 键直接发送消息，Shift+Enter 换行；路径输入框 Tab 键填入补全第一项并展开下一层子目录
+
+### Fixed
+- `packages/tool-gateway/index.ts`：`readFile` 改为从磁盘按需读取（修复 scanDir 去内容后点击文件无内容显示的问题）；新增路径安全校验（防止路径穿越）
+- `apps/runtime/server.ts`：`/api/file/:path` 路由改为直接从磁盘读取文件内容
+- `packages/context-builder/index.ts`：`buildForPrompt` 改为 async，适配异步 readFile
+- `apps/web/app.ts`：修正新建会话弹窗描述（原文误称"历史摘要会保留"，实际新会话完全从空白开始）
+
 ## 2026-04-27
 
 ### Added
