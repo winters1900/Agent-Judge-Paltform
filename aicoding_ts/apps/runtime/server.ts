@@ -197,6 +197,32 @@ export function startRuntimeServer() {
       return;
     }
 
+    // ── GET /api/sessions（历史会话列表）──
+    if (url.pathname === '/api/sessions' && req.method === 'GET') {
+      const sessions = await sessionStore.listSessions();
+      sendJson(res, 200, { sessions });
+      return;
+    }
+
+    // ── POST /api/session/switch（切换会话）──
+    if (url.pathname === '/api/session/switch' && req.method === 'POST') {
+      const { sessionId } = await parseBody<{ sessionId?: string }>(req);
+      if (!sessionId) { sendJson(res, 400, { error: 'sessionId is required' }); return; }
+      try {
+        const session = await sessionStore.switchSession(sessionId);
+        sendJson(res, 200, {
+          sessionId: session.sessionId,
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+          messages: session.messages,
+          taskSummaries: session.taskSummaries,
+        });
+      } catch (err) {
+        sendJson(res, 404, { error: err instanceof Error ? err.message : String(err) });
+      }
+      return;
+    }
+
     // ── POST /api/workspace/load（切换工作区目录）──
     if (url.pathname === '/api/workspace/load' && req.method === 'POST') {
       const { path: dirPath } = await parseBody<{ path?: string }>(req);

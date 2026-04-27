@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DEFAULT_PROJECT_ID } from '../shared/index.ts';
 import type { Session, TaskSummary, ChatMessage } from '../shared/types.ts';
@@ -94,6 +94,53 @@ export function createSessionStore(options: { projectId?: string } = {}) {
     }
   }
 
+  async function listSessions(): Promise<Array<{
+    sessionId: string;
+    createdAt: string;
+    updatedAt: string;
+    taskCount: number;
+    lastMessage: string;
+  }>> {
+    await ensureDir();
+    let files: string[];
+    try {
+      files = await readdir(sessionsDir);
+    } catch {
+      return [];
+    }
+    const results = await Promise.all(
+      files
+        .filter((f) => f.endsWith('.json') && f !== 'current.json')
+        .map(async (f) => {
+          try {
+            const raw = await readFile(join(sessionsDir, f), 'utf8');
+            const s = JSON.parse(raw) as Session;
+            const lastUser = [...s.messages].reverse().find((m) => m.role === 'user');
+            const lastMsg = typeof lastUser?.content === 'string' ? lastUser.content : '';
+            return {
+              sessionId: s.sessionId,
+              createdAt: s.createdAt,
+              updatedAt: s.updatedAt,
+              taskCount: s.taskSummaries.length,
+              lastMessage: lastMsg.slice(0, 60),
+            };
+          } catch {
+            return null;
+          }
+        }),
+    );
+    return results
+      .filter((r): r is NonNullable<typeof r> => r !== null)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async function switchSession(sessionId: string): Promise<Session> {
+    const session = await loadSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    await setCurrentSessionId(sessionId);
+    return session;
+  }
+
   return {
     sessionsDir,
     getCurrentSessionId,
@@ -105,5 +152,7 @@ export function createSessionStore(options: { projectId?: string } = {}) {
     appendMessages,
     appendTaskSummary,
     readProjectMemory,
+    listSessions,
+    switchSession,
   };
 }

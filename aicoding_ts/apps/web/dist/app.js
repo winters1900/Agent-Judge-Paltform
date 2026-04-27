@@ -11,6 +11,7 @@ const workspaceLayout = document.querySelector('#workspaceLayout');
 const newItemBtn = document.querySelector('#newItemBtn');
 const newItemMenu = document.querySelector('#newItemMenu');
 const sessionBadge = document.querySelector('#sessionBadge');
+const sessionDropdown = document.querySelector('#sessionDropdown');
 const agentStatusBadge = document.querySelector('#agentStatusBadge');
 const newSessionBtn = document.querySelector('#newSessionBtn');
 const workspacePathInput = document.querySelector('#workspacePathInput');
@@ -763,6 +764,85 @@ async function initSession() {
         sessionBadge.textContent = '会话加载失败';
     }
 }
+function formatRelativeTime(iso) {
+    const diff = Date.now() - new Date(iso).getTime();
+    const m = Math.floor(diff / 60000);
+    if (m < 1)
+        return '刚刚';
+    if (m < 60)
+        return `${m} 分钟前`;
+    const h = Math.floor(m / 60);
+    if (h < 24)
+        return `${h} 小时前`;
+    return `${Math.floor(h / 24)} 天前`;
+}
+function hideSessionDropdown() {
+    sessionDropdown.classList.remove('visible');
+    sessionDropdown.setAttribute('aria-hidden', 'true');
+}
+async function renderSessionDropdown() {
+    const res = await fetch('/api/sessions');
+    const data = await res.json();
+    const sessions = data.sessions;
+    sessionDropdown.innerHTML = '';
+    if (sessions.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'padding:12px;color:var(--muted);font-size:13px;text-align:center';
+        empty.textContent = '暂无历史会话';
+        sessionDropdown.appendChild(empty);
+    }
+    else {
+        sessions.forEach((s) => {
+            const shortId = s.sessionId.replace('session-', '').slice(-6);
+            const item = document.createElement('div');
+            item.className = 'session-item' + (s.sessionId === currentSessionId ? ' active' : '');
+            item.innerHTML = `
+        <div class="session-item-header">
+          <span class="session-item-id">#${shortId}</span>
+          <span class="session-item-time">${formatRelativeTime(s.updatedAt)}</span>
+        </div>
+        ${s.lastMessage ? `<div class="session-item-preview">${s.lastMessage}</div>` : ''}
+        <div class="session-item-meta">${s.taskCount} 个任务</div>
+      `;
+            item.addEventListener('mousedown', async (e) => {
+                e.preventDefault();
+                hideSessionDropdown();
+                if (s.sessionId === currentSessionId)
+                    return;
+                await switchToSession(s.sessionId);
+            });
+            sessionDropdown.appendChild(item);
+        });
+    }
+    sessionDropdown.classList.add('visible');
+    sessionDropdown.setAttribute('aria-hidden', 'false');
+}
+async function switchToSession(sessionId) {
+    const res = await fetch('/api/session/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId }),
+    });
+    if (!res.ok)
+        return;
+    const session = await res.json();
+    currentSessionId = session.sessionId;
+    const shortId = session.sessionId.replace('session-', '').slice(-6);
+    sessionBadge.textContent = `会话 #${shortId}`;
+    // 还原完整对话
+    chatLog.innerHTML = '';
+    for (const msg of session.messages) {
+        if (msg.role === 'user' && typeof msg.content === 'string') {
+            appendMessage('user', msg.content);
+        }
+        else if (msg.role === 'assistant' && typeof msg.content === 'string' && msg.content) {
+            appendMessage('agent', msg.content);
+        }
+    }
+    if (session.messages.length === 0) {
+        appendMessage('agent', `已切换到会话 #${shortId}（空会话）`);
+    }
+}
 async function createNewSession() {
     const confirmed = await showConfirmDialog({
         title: '新建会话',
@@ -942,6 +1022,15 @@ chatForm.addEventListener('submit', async (event) => {
     }
 });
 newSessionBtn.addEventListener('click', createNewSession);
+sessionBadge.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (sessionDropdown.classList.contains('visible')) {
+        hideSessionDropdown();
+    }
+    else {
+        renderSessionDropdown();
+    }
+});
 refreshBtn.addEventListener('click', loadWorkspace);
 newItemBtn.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -958,6 +1047,7 @@ document.addEventListener('click', () => {
     hideContextMenu();
     hideNewItemMenu();
     hideSuggestList();
+    hideSessionDropdown();
 });
 loadLayoutState();
 applyLayoutWidths();

@@ -22,7 +22,10 @@
           <button type="button" id="loadWorkspaceBtn">加载</button>
         </div>
         <div class="topbar-right">
-          <span id="sessionBadge" class="session-badge">会话加载中…</span>
+          <div class="session-switcher-wrap">
+            <button id="sessionBadge" class="session-badge" type="button">会话加载中…</button>
+            <div id="sessionDropdown" class="session-dropdown" role="menu" aria-hidden="true"></div>
+          </div>
           <span id="agentStatusBadge" class="agent-status-badge" data-status="idle">空闲</span>
           <button id="newSessionBtn" type="button">新建会话</button>
           <div class="status-pill">运行中 · Runtime + Web</div>
