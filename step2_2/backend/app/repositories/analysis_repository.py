@@ -19,7 +19,7 @@ class AnalysisRepository(BaseRepository):
 
     def list_all(self) -> list[AnalysisResult]:
         stmt = select(AnalysisResult)
-        return list(self.session.scalars(stmt).all())
+        return list(self.session.scalars(stmt.order_by(AnalysisResult.id.desc())).all())
 
     def get_by_id(self, analysis_id: int) -> AnalysisResult | None:
         return self.session.get(AnalysisResult, analysis_id)

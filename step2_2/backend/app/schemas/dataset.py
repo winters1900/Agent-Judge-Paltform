@@ -30,7 +30,17 @@ class DatasetSampleCreate(BaseModel):
     reference_context: dict | None = None
     ground_truth: dict | None = None
     sample_type: str
-    sample_metadata: dict | None = None
+    metadata: dict | None = None
+
+
+class DatasetSampleUpdate(BaseModel):
+    sample_code: str | None = None
+    input_payload: dict | None = None
+    expected_output: dict | None = None
+    reference_context: dict | None = None
+    ground_truth: dict | None = None
+    sample_type: str | None = None
+    metadata: dict | None = None
 
 
 class DatasetSampleResponse(DatasetSampleCreate):
@@ -40,3 +50,7 @@ class DatasetSampleResponse(DatasetSampleCreate):
     dataset_id: int
     created_at: datetime
     updated_at: datetime
+
+
+class DatasetSampleImportRequest(BaseModel):
+    samples: list[DatasetSampleCreate]

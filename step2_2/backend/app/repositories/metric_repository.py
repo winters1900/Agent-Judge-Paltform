@@ -17,7 +17,7 @@ class MetricRepository(BaseRepository):
 
     def list_metrics(self) -> list[MetricDefinition]:
         stmt = select(MetricDefinition)
-        return list(self.session.scalars(stmt).all())
+        return list(self.session.scalars(stmt.order_by(MetricDefinition.id.desc())).all())
 
     def get_metric_by_id(self, metric_id: int) -> MetricDefinition | None:
         return self.session.get(MetricDefinition, metric_id)

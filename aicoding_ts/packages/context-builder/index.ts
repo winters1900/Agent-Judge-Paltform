@@ -73,15 +73,15 @@ function buildWorkspaceSummary(files: WorkspaceFile[], options: { maxFiles: numb
 
 export function createContextBuilder(toolGateway: {
   listWorkspace: () => WorkspaceFile[];
-  readFile: (path: string) => WorkspaceFile | null;
+  readFile: (path: string) => Promise<WorkspaceFile | null>;
 }, options: { maxFiles?: number; maxChars?: number } = {}) {
   const maxFiles = options.maxFiles ?? 8;
   const maxChars = options.maxChars ?? 12000;
 
   return {
-    buildForPrompt(prompt: string, selectedFile: string | null = null): WorkspaceSummary {
+    async buildForPrompt(prompt: string, selectedFile: string | null = null): Promise<WorkspaceSummary> {
       const files = toolGateway.listWorkspace();
-      const selectedFileContent = selectedFile ? toolGateway.readFile(selectedFile) : null;
+      const selectedFileContent = selectedFile ? await toolGateway.readFile(selectedFile) : null;
 
       const promptTokens = tokenize(prompt);
       const selectedFileTokens = tokenize(selectedFile ?? '');

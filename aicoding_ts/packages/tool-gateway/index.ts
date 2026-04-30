@@ -1,10 +1,13 @@
-import { execFile } from 'child_process';
+import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import type { TreeNode, WorkspaceFile } from '../workspace-manager/index.ts';
 import { createMcpServer, type McpServer } from '../mcp-server/index.ts';
 
 type WorkspaceManager = {
   rootDir: string;
   projectId: string;
+  getRootDir: () => string;
   findFile: (path: string) => WorkspaceFile | null;
   updateFile: (path: string, content: string) => Promise<unknown>;
   listTree: () => TreeNode[];
@@ -34,7 +37,17 @@ function buildToolDefinitions(workspaceManager: WorkspaceManager) {
       name: 'read_file',
       description: '读取工作区中的文件内容',
       inputSchema: buildInputSchema({ path: { type: 'string', minLength: 1 } }, ['path']),
-      handler: ({ path }: Record<string, unknown>) => workspaceManager.findFile(String(path ?? '')),
+      handler: async ({ path }: Record<string, unknown>) => {
+        const rootDir = workspaceManager.getRootDir();
+        const absPath = resolve(join(rootDir, String(path ?? '')));
+        if (!absPath.startsWith(resolve(rootDir))) return null;
+        try {
+          const content = await readFile(absPath, 'utf8');
+          return { path, content };
+        } catch {
+          return null;
+        }
+      },
     },
     {
       name: 'write_file',
@@ -89,7 +102,7 @@ function buildToolDefinitions(workspaceManager: WorkspaceManager) {
       handler: async ({ command }: Record<string, unknown>) => {
         return new Promise((resolve) => {
           const [cmd, ...args] = splitCommand(String(command ?? ''));
-          execFile(cmd, args, { cwd: workspaceManager.rootDir }, (error: unknown, stdout: string, stderr: string) => {
+          execFile(cmd, args, { cwd: workspaceManager.getRootDir() }, (error: unknown, stdout: string, stderr: string) => {
             resolve({
               command,
               status: error ? 'failed' : 'success',
@@ -147,7 +160,7 @@ function buildResourceDefinitions(workspaceManager: WorkspaceManager) {
       description: '工作区元信息',
       uri: 'mcp://workspace/meta',
       mimeType: 'application/json',
-      handler: () => ({ projectId: workspaceManager.projectId, rootDir: workspaceManager.rootDir }),
+      handler: () => ({ projectId: workspaceManager.projectId, rootDir: workspaceManager.getRootDir() }),
     },
   ];
 }
@@ -189,8 +202,16 @@ export function createToolGateway(workspaceManager: WorkspaceManager) {
   });
 
   return {
-    readFile(path: string) {
-      return workspaceManager.findFile(path);
+    async readFile(path: string): Promise<WorkspaceFile | null> {
+      const rootDir = workspaceManager.getRootDir();
+      const absPath = resolve(join(rootDir, path));
+      if (!absPath.startsWith(resolve(rootDir))) return null;
+      try {
+        const content = await readFile(absPath, 'utf8');
+        return { path, content };
+      } catch {
+        return null;
+      }
     },
     async writeFile(path: string, content: string) {
       return workspaceManager.updateFile(path, content);
@@ -207,7 +228,7 @@ export function createToolGateway(workspaceManager: WorkspaceManager) {
     async runCommand(command: string) {
       return new Promise((resolve) => {
         const [cmd, ...args] = splitCommand(command);
-        execFile(cmd, args, { cwd: workspaceManager.rootDir }, (error: unknown, stdout: string, stderr: string) => {
+        execFile(cmd, args, { cwd: workspaceManager.getRootDir() }, (error: unknown, stdout: string, stderr: string) => {
           resolve({
             command,
             status: error ? 'failed' : 'success',

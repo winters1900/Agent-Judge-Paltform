@@ -23,7 +23,7 @@ class TaskRepository(BaseRepository):
             stmt = stmt.where(EvaluationTask.name.contains(name))
         if status:
             stmt = stmt.where(EvaluationTask.status == status)
-        return list(self.session.scalars(stmt).all())
+        return list(self.session.scalars(stmt.order_by(EvaluationTask.id.desc())).all())
 
     def get_by_id(self, task_id: int) -> EvaluationTask | None:
         return self.session.get(EvaluationTask, task_id)

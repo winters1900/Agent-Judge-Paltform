@@ -218,3 +218,5 @@ export function createMcpServer(options: {
     jsonRpc,
   };
 }
+
+export type McpServer = ReturnType<typeof createMcpServer>;

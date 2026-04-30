@@ -13,7 +13,24 @@
           <p class="eyebrow">Agent First Workspace</p>
           <h1>AI Coding Agent Web MVP</h1>
         </div>
-        <div class="status-pill">运行中 · Runtime + Web</div>
+        <div id="workspaceBar" class="workspace-bar">
+          <span class="workspace-label">工作区</span>
+          <div class="workspace-input-wrap">
+            <input id="workspacePathInput" type="text" placeholder="/path/to/your/project" autocomplete="off" spellcheck="false" />
+            <ul id="workspaceSuggestList" class="suggest-list"></ul>
+          </div>
+          <button type="button" id="loadWorkspaceBtn">加载</button>
+        </div>
+        <div class="topbar-right">
+          <div class="session-switcher-wrap">
+            <button id="sessionBadge" class="session-badge" type="button">会话加载中…</button>
+            <div id="sessionDropdown" class="session-dropdown" role="menu" aria-hidden="true"></div>
+          </div>
+          <span id="agentStatusBadge" class="agent-status-badge" data-status="idle">空闲</span>
+          <button id="newSessionBtn" type="button">新建会话</button>
+          <a class="ghost-button" href="/mcp-config.html">MCP 配置</a>
+          <div class="status-pill">运行中 · Runtime + Web</div>
+        </div>
       </header>
 
       <main id="workspaceLayout" class="workspace-layout">
@@ -34,7 +51,10 @@
         <section class="panel editor-panel resizable-panel" data-panel="editor">
           <div class="panel-header">
             <h2>编辑器</h2>
-            <span>当前文件</span>
+            <div class="editor-header-right">
+              <span id="editorSaveBadge" class="save-badge" data-state="idle" title="未打开文件">未打开</span>
+              <span>当前文件</span>
+            </div>
           </div>
           <textarea id="editor" spellcheck="false"></textarea>
         </section>

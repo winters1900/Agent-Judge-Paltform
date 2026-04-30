@@ -11,6 +11,10 @@ class ReportCreate(BaseModel):
     report_format: str
 
 
+class ReportExportRequest(BaseModel):
+    report_format: str = "pdf"
+
+
 class ReportResponse(ReportCreate):
     model_config = ConfigDict(from_attributes=True)
 

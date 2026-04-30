@@ -8,6 +8,8 @@ class RunCreate(BaseModel):
     task_id: int
     status: str = "queued"
     progress: float = 0.0
+    current_sample_id: int | None = None
+    retry_count: int = 0
     summary: str | None = None
     trace_id: str | None = None
     error_message: str | None = None
@@ -37,10 +39,7 @@ class EvaluationRunResponse(RunCreate):
     updated_at: datetime
 
 
-class SampleResultResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
+class SampleResultCreate(BaseModel):
     run_id: int
     sample_id: int
     status: str
@@ -50,5 +49,11 @@ class SampleResultResponse(BaseModel):
     error_message: str | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None
+
+
+class SampleResultResponse(SampleResultCreate):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
     created_at: datetime
     updated_at: datetime

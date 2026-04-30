@@ -11,9 +11,7 @@
     "allowJs": true,
     "checkJs": false,
     "noEmit": true,
-    "ignoreDeprecations": "6.0",
     "baseUrl": ".",
-    "types": ["node"],
     "allowImportingTsExtensions": true
   },
   "include": ["apps/**/*", "packages/**/*", "server.js", "server.ts", "public/**/*"],

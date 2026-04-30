@@ -3,8 +3,10 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.repositories.metric_repository import MetricRepository
+from app.schemas.common import PageResponse
 from app.schemas.metric import EvaluationMethodResponse, MetricCreate, MetricDefinitionResponse, MetricResultResponse
 from app.services.metric_service.metric_manager import MetricManager
+from app.services.pagination_service import paginate
 
 router = APIRouter(prefix="/api/v1", tags=["metrics"])
 
@@ -18,9 +20,14 @@ def list_methods(manager: MetricManager = Depends(get_metric_manager)):
     return manager.list_methods()
 
 
-@router.get("/metrics", response_model=list[MetricDefinitionResponse])
-def list_metrics(manager: MetricManager = Depends(get_metric_manager)):
-    return manager.list_metrics()
+@router.get("/metrics", response_model=PageResponse)
+def list_metrics(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    manager: MetricManager = Depends(get_metric_manager),
+):
+    items = manager.list_metrics()
+    return paginate(items, page=page, page_size=page_size)
 
 
 @router.post("/metrics", response_model=MetricDefinitionResponse)

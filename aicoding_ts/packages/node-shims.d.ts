@@ -3,6 +3,11 @@ declare const process: {
   env: Record<string, string | undefined>;
 };
 
+declare type FsDirent = {
+  name: string;
+  isDirectory(): boolean;
+};
+
 declare module 'node:fs' {
   export const promises: {
     mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
@@ -11,11 +16,32 @@ declare module 'node:fs' {
     rename(oldPath: string, newPath: string): Promise<void>;
     rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
     stat(path: string): Promise<{ isDirectory(): boolean }>;
+    readdir(path: string, options?: { withFileTypes?: boolean }): Promise<Array<string | FsDirent>>;
   };
+}
+
+declare module 'node:fs/promises' {
+  export const readFile: typeof import('node:fs').promises.readFile;
+  export const writeFile: typeof import('node:fs').promises.writeFile;
+  export const mkdir: typeof import('node:fs').promises.mkdir;
+  export const rename: typeof import('node:fs').promises.rename;
+  export const rm: typeof import('node:fs').promises.rm;
+  export const stat: typeof import('node:fs').promises.stat;
+  export const readdir: typeof import('node:fs').promises.readdir;
 }
 
 declare module 'fs' {
   export const promises: typeof import('node:fs').promises;
+}
+
+declare module 'fs/promises' {
+  export const readFile: typeof import('node:fs').promises.readFile;
+  export const writeFile: typeof import('node:fs').promises.writeFile;
+  export const mkdir: typeof import('node:fs').promises.mkdir;
+  export const rename: typeof import('node:fs').promises.rename;
+  export const rm: typeof import('node:fs').promises.rm;
+  export const stat: typeof import('node:fs').promises.stat;
+  export const readdir: typeof import('node:fs').promises.readdir;
 }
 
 declare module 'node:path' {
@@ -63,8 +89,14 @@ declare module 'child_process' {
     options: { cwd?: string },
     callback: (error: unknown, stdout: string, stderr: string) => void,
   ): void;
+  export function spawn(command: string, args?: string[], options?: { env?: Record<string, string | undefined>; stdio?: Array<'pipe' | 'ignore' | 'inherit'> }): {
+    stdout: { on(event: 'data', listener: (chunk: { toString(encoding?: string): string }) => void): void };
+    stderr: { on(event: 'data', listener: (chunk: { toString(encoding?: string): string }) => void): void };
+    stdin: { write(data: string): void };
+    kill(): void;
+  };
 }
 
 declare module 'node:child_process' {
-  export { execFile } from 'child_process';
+  export { execFile, spawn } from 'child_process';
 }

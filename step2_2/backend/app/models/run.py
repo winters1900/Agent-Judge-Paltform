@@ -14,6 +14,8 @@ class EvaluationRun(TimestampMixin, Base):
     task_id: Mapped[int] = mapped_column(ForeignKey("evaluation_task.id"), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     progress: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=0)
+    current_sample_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)

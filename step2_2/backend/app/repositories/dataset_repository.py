@@ -23,7 +23,7 @@ class DatasetRepository(BaseRepository):
             stmt = stmt.where(Dataset.name.contains(name))
         if status:
             stmt = stmt.where(Dataset.status == status)
-        return list(self.session.scalars(stmt).all())
+        return list(self.session.scalars(stmt.order_by(Dataset.id.desc())).all())
 
     def get_by_id(self, dataset_id: int) -> Dataset | None:
         return self.session.get(Dataset, dataset_id)
@@ -47,6 +47,20 @@ class DatasetRepository(BaseRepository):
         self.session.commit()
         self.session.refresh(sample)
         return sample
+
+    def update_sample(self, sample: DatasetSample) -> DatasetSample:
+        self.session.add(sample)
+        self.session.commit()
+        self.session.refresh(sample)
+        return sample
+
+    def delete_sample(self, sample: DatasetSample) -> None:
+        self.session.delete(sample)
+        self.session.commit()
+
+    def get_sample_by_id(self, dataset_id: int, sample_id: int) -> DatasetSample | None:
+        stmt = select(DatasetSample).where(DatasetSample.id == sample_id, DatasetSample.dataset_id == dataset_id)
+        return self.session.scalars(stmt).first()
 
     def list_samples(self, dataset_id: int) -> list[DatasetSample]:
         stmt = select(DatasetSample).where(DatasetSample.dataset_id == dataset_id)

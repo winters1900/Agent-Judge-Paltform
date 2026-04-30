@@ -23,7 +23,7 @@ class RunRepository(BaseRepository):
             stmt = stmt.where(EvaluationRun.task_id == task_id)
         if status:
             stmt = stmt.where(EvaluationRun.status == status)
-        return list(self.session.scalars(stmt).all())
+        return list(self.session.scalars(stmt.order_by(EvaluationRun.id.desc())).all())
 
     def get_by_id(self, run_id: int) -> EvaluationRun | None:
         return self.session.get(EvaluationRun, run_id)

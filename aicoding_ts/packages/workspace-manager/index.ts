@@ -1,4 +1,5 @@
-import { promises as fs } from 'node:fs';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { DEFAULT_PROJECT_ID } from '../shared/index.ts';
 
 export type WorkspaceSearchHit = {
@@ -207,13 +208,13 @@ export function createWorkspaceManager(options: { projectId?: string; rootDir?: 
   };
 
   async function ensureWorkspaceDir() {
-    await fs.mkdir(state.rootDir, { recursive: true });
+    await mkdir(state.rootDir, { recursive: true });
   }
 
   async function ensureDirectoryNode(dirPath: string) {
     const normalized = normalizePath(dirPath);
     const absolute = `${state.rootDir}/${normalized}`;
-    await fs.mkdir(absolute, { recursive: true });
+    await mkdir(absolute, { recursive: true });
   }
 
   function listTree(): TreeNode[] {
@@ -353,8 +354,8 @@ export function createWorkspaceManager(options: { projectId?: string; rootDir?: 
     state.tree = upsertNode(state.tree, normalized.split('/').filter(Boolean), after);
     const filePath = `${state.rootDir}/${normalized}`;
     const dirPath = filePath.slice(0, filePath.lastIndexOf('/'));
-    if (dirPath) await fs.mkdir(dirPath, { recursive: true });
-    await fs.writeFile(filePath, after, 'utf8');
+    if (dirPath) await mkdir(dirPath, { recursive: true });
+    await writeFile(filePath, after, 'utf8');
 
     return {
       ok: true,
@@ -374,8 +375,8 @@ export function createWorkspaceManager(options: { projectId?: string; rootDir?: 
 
     const filePath = resolveWorkspacePath(normalized);
     const dir = filePath.slice(0, filePath.lastIndexOf('/'));
-    if (dir) await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(filePath, content, 'utf8');
+    if (dir) await mkdir(dir, { recursive: true });
+    await writeFile(filePath, content, 'utf8');
 
     return {
       ok: true,
@@ -415,8 +416,8 @@ export function createWorkspaceManager(options: { projectId?: string; rootDir?: 
     const nextAbsolute = `${state.rootDir}/${nextPath}`;
 
     const nextDir = nextAbsolute.slice(0, nextAbsolute.lastIndexOf('/'));
-    if (nextDir) await fs.mkdir(nextDir, { recursive: true });
-    await fs.rename(oldAbsolute, nextAbsolute);
+    if (nextDir) await mkdir(nextDir, { recursive: true });
+    await rename(oldAbsolute, nextAbsolute);
 
     state.tree = renameNode(state.tree, segments, nextName);
 
@@ -434,10 +435,10 @@ export function createWorkspaceManager(options: { projectId?: string; rootDir?: 
     const normalized = normalizePath(path);
     const segments = normalized.split('/').filter(Boolean);
     const absolute = resolveWorkspacePath(normalized);
-    const stats = await fs.stat(absolute);
+    const stats = await stat(absolute);
 
     if (stats.isDirectory()) {
-      await fs.rm(absolute, { recursive: true, force: true });
+      await rm(absolute, { recursive: true, force: true });
       state.tree = removeNode(state.tree, segments);
       return {
         ok: true,
@@ -447,7 +448,7 @@ export function createWorkspaceManager(options: { projectId?: string; rootDir?: 
       };
     }
 
-    await fs.rm(absolute, { force: true });
+    await rm(absolute, { force: true });
     state.tree = removeNode(state.tree, segments);
     return {
       ok: true,
@@ -457,28 +458,61 @@ export function createWorkspaceManager(options: { projectId?: string; rootDir?: 
     };
   }
 
-  async function loadFromDisk() {
-    await ensureWorkspaceDir();
-    const files = listFiles();
+  const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', 'dist', '__pycache__', '.cache', 'vendor', '.yarn', 'build', 'coverage', '.next', '.nuxt', 'out']);
+  const MAX_SCAN_DEPTH = 6;
 
-    for (const file of files) {
-      const filePath = `${state.rootDir}/${file.path}`;
-      try {
-        const content = await fs.readFile(filePath, 'utf8');
-        file.content = content;
-      } catch {
-        const dir = filePath.slice(0, filePath.lastIndexOf('/'));
-        if (dir) await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(filePath, file.content ?? '', 'utf8');
+  async function scanDir(dir: string, depth = 0): Promise<TreeNode[]> {
+    if (depth > MAX_SCAN_DEPTH) return [];
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const nodes: TreeNode[] = [];
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        nodes.push({
+          id: `folder-${entry.name}`,
+          name: entry.name,
+          type: 'folder',
+          children: await scanDir(fullPath, depth + 1),
+        });
+      } else {
+        nodes.push({ id: `file-${entry.name}`, name: entry.name, type: 'file' });
       }
     }
+    return nodes;
+  }
 
+  async function loadFromDisk() {
+    await ensureWorkspaceDir();
+    state.tree = await scanDir(state.rootDir);
+    return state.tree;
+  }
+
+  function getRootDir(): string {
+    return state.rootDir;
+  }
+
+  async function switchRoot(newRootDir: string): Promise<TreeNode[]> {
+    const resolved = resolve(newRootDir);
+    const info = await stat(resolved);
+    if (!info.isDirectory()) throw new Error(`不是目录：${resolved}`);
+    state.rootDir = resolved;
+    state.tree = [];
+    state.tree = await scanDir(state.rootDir);
     return state.tree;
   }
 
   return {
     projectId,
     rootDir,
+    getRootDir,
+    switchRoot,
     listTree,
     listFiles,
     findFile,

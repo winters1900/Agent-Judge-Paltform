@@ -3,7 +3,9 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.repositories.task_repository import TaskRepository
+from app.schemas.common import PageResponse
 from app.schemas.task import EvaluationTaskCreate, EvaluationTaskResponse, EvaluationTaskUpdate
+from app.services.pagination_service import paginate
 from app.services.task_service.task_manager import TaskManager
 
 router = APIRouter(prefix="/api/v1/evaluation-tasks", tags=["evaluation-tasks"])
@@ -19,13 +21,16 @@ def create_task(payload: EvaluationTaskCreate, manager: TaskManager = Depends(ge
     return task
 
 
-@router.get("", response_model=list[EvaluationTaskResponse])
+@router.get("", response_model=PageResponse)
 def list_tasks(
     name: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
     manager: TaskManager = Depends(get_task_manager),
 ):
-    return manager.list_tasks(name=name, status=status)
+    items = manager.list_tasks(name=name, status=status)
+    return paginate(items, page=page, page_size=page_size)
 
 
 @router.get("/{task_id}", response_model=EvaluationTaskResponse)

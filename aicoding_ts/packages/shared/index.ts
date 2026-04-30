@@ -1,3 +1,5 @@
+export * from './types.ts';
+
 export const APP_NAME = 'AI Coding Agent Web MVP';
 export const DEFAULT_PROJECT_ID = 'demo-project';
 

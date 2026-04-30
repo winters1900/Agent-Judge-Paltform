@@ -4,11 +4,19 @@ const promptInput = document.querySelector<HTMLTextAreaElement>('#promptInput')!
 const fileTree = document.querySelector<HTMLElement>('#fileTree')!;
 const editor = document.querySelector<HTMLTextAreaElement>('#editor')!;
 const currentFile = document.querySelector<HTMLElement>('#currentFile')!;
+const editorSaveBadge = document.querySelector<HTMLElement>('#editorSaveBadge')!;
 const summary = document.querySelector<HTMLElement>('#summary')!;
 const refreshBtn = document.querySelector<HTMLButtonElement>('#refreshBtn')!;
 const workspaceLayout = document.querySelector<HTMLElement>('#workspaceLayout')!;
 const newItemBtn = document.querySelector<HTMLButtonElement>('#newItemBtn')!;
 const newItemMenu = document.querySelector<HTMLElement>('#newItemMenu');
+const sessionBadge = document.querySelector<HTMLButtonElement>('#sessionBadge')!;
+const sessionDropdown = document.querySelector<HTMLElement>('#sessionDropdown')!;
+const agentStatusBadge = document.querySelector<HTMLElement>('#agentStatusBadge')!;
+const newSessionBtn = document.querySelector<HTMLButtonElement>('#newSessionBtn')!;
+const workspacePathInput = document.querySelector<HTMLInputElement>('#workspacePathInput')!;
+const workspaceSuggestList = document.querySelector<HTMLUListElement>('#workspaceSuggestList')!;
+const loadWorkspaceBtn = document.querySelector<HTMLButtonElement>('#loadWorkspaceBtn')!;;
 
 type WorkspaceNode = {
   id: string;
@@ -32,12 +40,19 @@ type PreviewResult = {
   data?: { toolResults?: Array<{ name: string; result?: { ok?: boolean; file?: unknown } }> };
 };
 
+type AgentStatusState = 'idle' | 'running' | 'waiting_confirm';
+type SaveState = 'idle' | 'saved' | 'dirty' | 'saving' | 'error';
+
 let selectedFile: string | null = null;
 let currentFileContent = '';
 let workspaceCache: WorkspaceNode[] = [];
 let currentAutoRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let editorSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let expandedFolders = new Set<string>();
+let currentSessionId: string | null = null;
+let agentStatus: AgentStatusState = 'idle';
+let saveState: SaveState = 'idle';
+let lastSaveError: string | null = null;
 
 const layoutState = {
   chat: 34,
@@ -153,13 +168,280 @@ function persistExpandedFolders() {
   localStorage.setItem('expandedFolders', JSON.stringify([...expandedFolders]));
 }
 
+function setSaveState(next: SaveState, detail?: string) {
+  saveState = next;
+  editorSaveBadge.dataset.state = next;
+  const labels: Record<SaveState, string> = {
+    idle: '未打开',
+    saved: '已保存',
+    dirty: '未保存',
+    saving: '保存中…',
+    error: '保存失败',
+  };
+  editorSaveBadge.textContent = labels[next];
+  if (next === 'idle') {
+    editorSaveBadge.title = '未打开文件';
+    lastSaveError = null;
+  } else if (next === 'error') {
+    lastSaveError = detail ?? lastSaveError ?? '未知错误';
+    editorSaveBadge.title = lastSaveError;
+  } else {
+    editorSaveBadge.title = detail ?? editorSaveBadge.textContent ?? '';
+    if (next !== 'error') lastSaveError = null;
+  }
+}
+
+// ── 工作区历史记录 ──
+const WORKSPACE_HISTORY_KEY = 'workspaceHistory';
+const WORKSPACE_HISTORY_MAX = 10;
+
+function loadWorkspaceHistory(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(WORKSPACE_HISTORY_KEY) ?? '[]') as string[];
+  } catch {
+    return [];
+  }
+}
+
+function saveWorkspaceHistory(path: string) {
+  const history = loadWorkspaceHistory().filter((p) => p !== path);
+  history.unshift(path);
+  localStorage.setItem(WORKSPACE_HISTORY_KEY, JSON.stringify(history.slice(0, WORKSPACE_HISTORY_MAX)));
+}
+
+// ── 路径补全 ──
+let suggestDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+function hideSuggestList() {
+  workspaceSuggestList.classList.remove('visible');
+  workspaceSuggestList.innerHTML = '';
+}
+
+function renderSuggestItems(items: Array<{ path: string; isHistory: boolean }>) {
+  if (items.length === 0) { hideSuggestList(); return; }
+  workspaceSuggestList.innerHTML = '';
+  items.forEach(({ path, isHistory }) => {
+    const li = document.createElement('li');
+    li.textContent = path;
+    if (isHistory) li.classList.add('history-item');
+    li.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      workspacePathInput.value = path;
+      hideSuggestList();
+      fetchSuggestions(path).then((suggestions) => {
+        const items = suggestions.map((p) => ({ path: p, isHistory: false }));
+        renderSuggestItems(items);
+      });
+    });
+    workspaceSuggestList.appendChild(li);
+  });
+  workspaceSuggestList.classList.add('visible');
+}
+
+async function fetchSuggestions(prefix: string): Promise<string[]> {
+  try {
+    const res = await fetch(`/api/fs/suggest?prefix=${encodeURIComponent(prefix)}`);
+    const data = await res.json() as { suggestions?: string[] };
+    return data.suggestions ?? [];
+  } catch {
+    return [];
+  }
+}
+
+workspacePathInput.addEventListener('input', () => {
+  if (suggestDebounceTimer) clearTimeout(suggestDebounceTimer);
+  suggestDebounceTimer = setTimeout(async () => {
+    const prefix = workspacePathInput.value.trim();
+    if (!prefix) { hideSuggestList(); return; }
+    const [fsSuggestions, history] = await Promise.all([
+      fetchSuggestions(prefix),
+      Promise.resolve(loadWorkspaceHistory().filter((h) => h.startsWith(prefix))),
+    ]);
+    const seen = new Set<string>();
+    const items: Array<{ path: string; isHistory: boolean }> = [];
+    for (const p of fsSuggestions) { if (!seen.has(p)) { seen.add(p); items.push({ path: p, isHistory: false }); } }
+    for (const p of history) { if (!seen.has(p)) { seen.add(p); items.push({ path: p, isHistory: true }); } }
+    renderSuggestItems(items);
+  }, 200);
+});
+
+workspacePathInput.addEventListener('focus', () => {
+  if (workspacePathInput.value.trim()) return;
+  const history = loadWorkspaceHistory();
+  renderSuggestItems(history.map((p) => ({ path: p, isHistory: true })));
+});
+
+workspacePathInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') hideSuggestList();
+  if (e.key === 'Tab') {
+    const first = workspaceSuggestList.querySelector('li');
+    if (first) {
+      e.preventDefault();
+      const path = first.textContent ?? '';
+      workspacePathInput.value = path;
+      hideSuggestList();
+      fetchSuggestions(path).then((suggestions) => {
+        renderSuggestItems(suggestions.map((p) => ({ path: p, isHistory: false })));
+      });
+    }
+  }
+  if (e.key === 'Enter') { e.preventDefault(); loadWorkspaceBtn.click(); }
+});
+
+// ── 加载工作区 ──
+function setWorkspaceError(msg: string | null) {
+  if (msg) {
+    workspacePathInput.classList.add('error');
+    workspacePathInput.title = msg;
+  } else {
+    workspacePathInput.classList.remove('error');
+    workspacePathInput.title = '';
+  }
+}
+
+loadWorkspaceBtn.addEventListener('click', async () => {
+  const path = workspacePathInput.value.trim();
+  if (!path) return;
+  hideSuggestList();
+  loadWorkspaceBtn.disabled = true;
+  loadWorkspaceBtn.textContent = '加载中…';
+  setWorkspaceError(null);
+
+  try {
+    const res = await fetch('/api/workspace/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    const data = await res.json() as { ok?: boolean; tree?: WorkspaceNode[]; sessionId?: string; error?: string };
+
+    if (!data.ok) {
+      setWorkspaceError(data.error ?? '加载失败');
+      return;
+    }
+
+    saveWorkspaceHistory(path);
+    workspaceCache = data.tree ?? [];
+    renderTree(workspaceCache);
+
+    if (data.sessionId) {
+      currentSessionId = data.sessionId;
+      const shortId = data.sessionId.replace('session-', '').slice(-6);
+      sessionBadge.textContent = `会话 #${shortId}`;
+    }
+
+    chatLog.innerHTML = '';
+    selectedFile = null;
+    currentFile.textContent = '未打开文件';
+    editor.value = '';
+    currentFileContent = '';
+    appendMessage('agent', `已加载工作区：${path}`);
+  } catch (err) {
+    setWorkspaceError(`请求失败：${(err as Error).message}`);
+  } finally {
+    loadWorkspaceBtn.disabled = false;
+    loadWorkspaceBtn.textContent = '加载';
+  }
+});
+
+function setAgentStatus(status: AgentStatusState) {
+  agentStatus = status;
+  agentStatusBadge.dataset.status = status;
+  const labels: Record<AgentStatusState, string> = {
+    idle: '空闲',
+    running: '运行中',
+    waiting_confirm: '等待确认',
+  };
+  agentStatusBadge.textContent = labels[status];
+  const submitBtn = chatForm.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  submitBtn.disabled = status !== 'idle';
+  promptInput.disabled = status !== 'idle';
+}
+
+function renderMarkdown(text: string): string {
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/```[\w]*\n?([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>[^\0]*?<\/li>(\n|$))+/g, (m) => `<ul>${m}</ul>`)
+    .replace(/\n/g, '<br>');
+}
+
+const TOOL_COLORS: Record<string, string> = {
+  write_file: 'var(--accent-2)',
+  read_file: 'var(--muted)',
+  run_command: '#f59e0b',
+  ask_user: '#facc15',
+  list_workspace: 'var(--muted)',
+};
+
 function appendMessage(role: string, text: string) {
   const div = document.createElement('div');
   div.className = `message ${role}`;
-  div.textContent = text;
+  div.innerHTML = renderMarkdown(text);
   chatLog.appendChild(div);
   chatLog.scrollTop = chatLog.scrollHeight;
   return div;
+}
+
+function renderConfirmCard(event: { confirmId: string; question: string; options?: string[] }) {
+  const card = document.createElement('div');
+  card.className = 'confirm-card';
+  card.dataset.confirmId = event.confirmId;
+
+  const questionEl = document.createElement('p');
+  questionEl.className = 'confirm-question';
+  questionEl.textContent = event.question;
+  card.appendChild(questionEl);
+
+  const actionsEl = document.createElement('div');
+  actionsEl.className = 'confirm-actions';
+
+  if (event.options && event.options.length > 0) {
+    event.options.forEach((opt) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'confirm-option-btn';
+      btn.textContent = opt;
+      btn.addEventListener('click', () => submitConfirm(event.confirmId, opt, card));
+      actionsEl.appendChild(btn);
+    });
+  } else {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = '输入回答…';
+    input.className = 'confirm-input';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'confirm-submit-btn';
+    btn.textContent = '提交';
+    btn.addEventListener('click', () => submitConfirm(event.confirmId, input.value, card));
+    actionsEl.appendChild(input);
+    actionsEl.appendChild(btn);
+  }
+
+  card.appendChild(actionsEl);
+  chatLog.appendChild(card);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+async function submitConfirm(confirmId: string, answer: string, card: HTMLElement) {
+  try {
+    await fetch('/api/agent/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmId, answer }),
+    });
+    card.classList.add('confirm-resolved');
+    const actionsEl = card.querySelector('.confirm-actions');
+    if (actionsEl) {
+      actionsEl.innerHTML = `<span class="confirm-answer">已回答：${answer}</span>`;
+    }
+  } catch {
+    appendMessage('agent', `提交确认失败`);
+  }
 }
 
 function isFolder(node: WorkspaceNode) {
@@ -303,20 +585,35 @@ function showRenameDialog(currentPath: string) {
 function saveCurrentFile() {
   if (!selectedFile) return;
   const content = editor.value;
-  if (content === currentFileContent) return;
+  if (content === currentFileContent) {
+    if (saveState !== 'saved') setSaveState('saved');
+    return;
+  }
+
+  if (saveState !== 'saving') setSaveState('dirty');
 
   if (editorSaveTimer) clearTimeout(editorSaveTimer);
   editorSaveTimer = setTimeout(async () => {
-    const res = await fetch('/api/file', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: selectedFile, content: editor.value }),
-    });
-    const data = await res.json();
-    currentFileContent = editor.value;
-    workspaceCache = data.tree || workspaceCache;
-    renderTree(workspaceCache);
-    scheduleWorkspaceRefresh(0);
+    try {
+      setSaveState('saving');
+      const res = await fetch('/api/file', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: selectedFile, content: editor.value }),
+      });
+      const data = await res.json() as { ok?: boolean; tree?: WorkspaceNode[]; error?: string };
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      currentFileContent = editor.value;
+      workspaceCache = data.tree || workspaceCache;
+      renderTree(workspaceCache);
+      scheduleWorkspaceRefresh(0);
+      setSaveState('saved');
+    } catch (err) {
+      setSaveState('error', (err as Error).message);
+      appendMessage('agent', `保存失败：${(err as Error).message}`);
+    }
   }, 300);
 }
 
@@ -543,6 +840,7 @@ async function openFile(path: string) {
   currentFile.textContent = path;
   currentFileContent = file.content ?? '';
   editor.value = currentFileContent;
+  setSaveState('saved');
 }
 
 function updateTreeEmptyState() {
@@ -762,7 +1060,7 @@ async function streamGenerateScaffold(projectName: string, templateId: string) {
   const response = await fetch('/api/agent/preview', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, selectedFile }),
+    body: JSON.stringify({ prompt, selectedFile, sessionId: currentSessionId }),
   });
 
   if (!response.ok || !response.body) {
@@ -779,16 +1077,19 @@ async function streamGenerateScaffold(projectName: string, templateId: string) {
   let toolCallElement: HTMLElement | null = null;
   let pendingToolDetails = '';
 
-  const ensureToolNode = () => {
+  const ensureToolNode = (toolName?: string) => {
     if (toolCallElement) return toolCallElement;
     toolCallElement = document.createElement('div');
     toolCallElement.className = 'tool-call';
     toolCallElement.dataset.kind = 'tool';
     toolCallElement.dataset.expanded = 'false';
+    const color = toolName ? (TOOL_COLORS[toolName] ?? 'var(--muted)') : 'var(--muted)';
+    const label = toolName ?? '工具调用';
     toolCallElement.innerHTML = `
       <button type="button" class="tool-call-header">
         <span class="tool-call-arrow">▸</span>
-        <span class="tool-call-title">工具调用结果</span>
+        <span class="tool-call-badge" style="background:${color}20;color:${color};border-color:${color}40">${label}</span>
+        <span class="tool-call-title">执行结果</span>
       </button>
       <pre class="tool-call-body"></pre>
     `;
@@ -809,16 +1110,27 @@ async function streamGenerateScaffold(projectName: string, templateId: string) {
   };
 
   const updateAssistant = (text: string) => {
-    currentMessageElement.textContent = text;
+    const body = currentMessageElement.querySelector<HTMLElement>('.tool-call-body');
+    if (body) {
+      body.innerHTML = renderMarkdown(text);
+      body.style.display = 'block';
+      currentMessageElement.dataset.expanded = 'true';
+      const arrow = currentMessageElement.querySelector<HTMLElement>('.tool-call-arrow');
+      if (arrow) arrow.textContent = '▾';
+    } else {
+      currentMessageElement.innerHTML = renderMarkdown(text);
+    }
     chatLog.scrollTop = chatLog.scrollHeight;
   };
 
-  const appendToolDetail = (text: string) => {
-    const node = ensureToolNode();
+  const appendToolDetail = (toolName: string, text: string) => {
+    const node = ensureToolNode(toolName);
     const body = node.querySelector<HTMLElement>('.tool-call-body')!;
     pendingToolDetails = pendingToolDetails ? `${pendingToolDetails}\n${text}` : text;
     body.textContent = pendingToolDetails;
   };
+
+  let accumulatedChunks = '';
 
   while (true) {
     const { value, done } = await reader.read();
@@ -835,29 +1147,54 @@ async function streamGenerateScaffold(projectName: string, templateId: string) {
       if (payload === '[DONE]') continue;
 
       try {
-        const event = JSON.parse(payload) as ToolEvent | { type: 'chunk'; chunk: string } | { type: 'result'; result: PreviewResult } | { type: 'error'; message: string };
+        const event = JSON.parse(payload) as
+          | ToolEvent
+          | { type: 'chunk'; chunk: string }
+          | { type: 'result'; result: PreviewResult }
+          | { type: 'error'; message: string }
+          | { type: 'session'; sessionId: string }
+          | { type: 'task_status'; taskId: string; status: string }
+          | { type: 'confirm_request'; confirmId: string; question: string; options?: string[] };
+
         if (event.type === 'chunk') {
-          updateAssistant((assistantMessage.textContent || '') + event.chunk);
+          accumulatedChunks += event.chunk;
+          updateAssistant(accumulatedChunks);
         } else if (event.type === 'tool') {
-          appendToolDetail(`${event.summary || '工具调用结果'}\n\n${event.detail || ''}`);
-        } else if (event.type === 'result') {
-          finalResult = event.result;
-          const toolResults = finalResult?.toolResults ?? finalResult?.data?.toolResults ?? [];
-          sawWriteFileSuccess = toolResults.some((item) => item?.name === 'write_file' && item?.result?.ok);
-          if (sawWriteFileSuccess) {
-            scheduleWorkspaceRefresh(100);
+          appendToolDetail(event.tool, `${event.summary || '工具调用结果'}\n\n${event.detail || ''}`);
+          if (event.tool === 'write_file') {
+            sawWriteFileSuccess = true;
+            scheduleWorkspaceRefresh(300);
           }
+        } else if (event.type === 'result') {
+          finalResult = event.result as PreviewResult;
+          setAgentStatus('idle');
         } else if (event.type === 'error') {
           updateAssistant(`出错了：${event.message}`);
+          setAgentStatus('idle');
+        } else if (event.type === 'session') {
+          currentSessionId = event.sessionId;
+          const shortId = event.sessionId.replace('session-', '').slice(-6);
+          sessionBadge.textContent = `会话 #${shortId}`;
+        } else if (event.type === 'task_status') {
+          const statusMap: Record<string, AgentStatusState> = {
+            planning: 'running',
+            executing: 'running',
+            summarizing: 'running',
+            waiting_confirm: 'waiting_confirm',
+            done: 'idle',
+            error: 'idle',
+          };
+          if (statusMap[event.status]) {
+            setAgentStatus(statusMap[event.status] as AgentStatusState);
+          }
+        } else if (event.type === 'confirm_request') {
+          setAgentStatus('waiting_confirm');
+          renderConfirmCard(event);
         }
       } catch {
         continue;
       }
     }
-  }
-
-  if (sawWriteFileSuccess) {
-    scheduleWorkspaceRefresh(0);
   }
 
   return finalResult;
@@ -866,23 +1203,40 @@ async function streamGenerateScaffold(projectName: string, templateId: string) {
 editor.addEventListener('input', saveCurrentFile);
 editor.addEventListener('blur', saveCurrentFile);
 
-chatForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const prompt = promptInput.value.trim();
-  if (!prompt) return;
-
-  appendMessage('user', prompt);
-  promptInput.value = '';
-  appendMessage('agent', '正在分析需求并生成执行计划…');
-
-  try {
-    const result = await streamPreview(prompt);
-    summary.textContent = JSON.stringify(result, null, 2);
-  } catch (error) {
-    appendMessage('agent', `请求失败：${(error as Error).message}`);
+promptInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    chatForm.requestSubmit();
   }
 });
 
+chatForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const prompt = promptInput.value.trim();
+  if (!prompt || agentStatus !== 'idle') return;
+
+  appendMessage('user', prompt);
+  promptInput.value = '';
+  setAgentStatus('running');
+
+  try {
+    const result = await streamChat(prompt);
+    summary.textContent = JSON.stringify(result, null, 2);
+  } catch (error) {
+    appendMessage('agent', `请求失败：${(error as Error).message}`);
+    setAgentStatus('idle');
+  }
+});
+
+newSessionBtn.addEventListener('click', createNewSession);
+sessionBadge.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (sessionDropdown.classList.contains('visible')) {
+    hideSessionDropdown();
+  } else {
+    renderSessionDropdown();
+  }
+});
 refreshBtn.addEventListener('click', loadWorkspace);
 newItemBtn.addEventListener('click', (event) => {
   event.stopPropagation();
@@ -898,6 +1252,8 @@ newItemMenu?.querySelectorAll<HTMLButtonElement>('button[data-kind]').forEach((b
 document.addEventListener('click', () => {
   hideContextMenu();
   hideNewItemMenu();
+  hideSuggestList();
+  hideSessionDropdown();
 });
 loadLayoutState();
 applyLayoutWidths();
