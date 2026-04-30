@@ -6,6 +6,13 @@ const editor = document.querySelector<HTMLTextAreaElement>('#editor')!;
 const currentFile = document.querySelector<HTMLElement>('#currentFile')!;
 const editorSaveBadge = document.querySelector<HTMLElement>('#editorSaveBadge')!;
 const summary = document.querySelector<HTMLElement>('#summary')!;
+const taskStatusSteps = document.querySelector<HTMLElement>('#taskStatusSteps')!;
+const retryLastTaskBtn = document.querySelector<HTMLButtonElement>('#retryLastTaskBtn')!;
+const waitingUserPanel = document.querySelector<HTMLElement>('#waitingUserPanel')!;
+const waitingUserQuestion = document.querySelector<HTMLElement>('#waitingUserQuestion')!;
+const waitingUserActions = document.querySelector<HTMLElement>('#waitingUserActions')!;
+const structuredSummary = document.querySelector<HTMLElement>('#structuredSummary')!;
+const toggleRawSummaryBtn = document.querySelector<HTMLButtonElement>('#toggleRawSummaryBtn')!;
 const refreshBtn = document.querySelector<HTMLButtonElement>('#refreshBtn')!;
 const workspaceLayout = document.querySelector<HTMLElement>('#workspaceLayout')!;
 const newItemBtn = document.querySelector<HTMLButtonElement>('#newItemBtn')!;
@@ -38,10 +45,22 @@ type PreviewResult = {
   output?: string;
   toolResults?: Array<{ name: string; result?: { ok?: boolean; file?: unknown } }>;
   data?: { toolResults?: Array<{ name: string; result?: { ok?: boolean; file?: unknown } }> };
+  summary?: string;
+  changedFiles?: string[];
+  commands?: Array<{ command: string; exitCode?: number; cwd?: string }>;
 };
 
 type AgentStatusState = 'idle' | 'running' | 'waiting_confirm';
 type SaveState = 'idle' | 'saved' | 'dirty' | 'saving' | 'error';
+type UiTaskPhase =
+  | 'idle'
+  | 'planning'
+  | 'context_loading'
+  | 'editing'
+  | 'validating'
+  | 'waiting_user'
+  | 'succeeded'
+  | 'failed';
 
 let selectedFile: string | null = null;
 let currentFileContent = '';
@@ -53,6 +72,11 @@ let currentSessionId: string | null = null;
 let agentStatus: AgentStatusState = 'idle';
 let saveState: SaveState = 'idle';
 let lastSaveError: string | null = null;
+let lastUserPrompt: string | null = null;
+let lastTaskPhase: UiTaskPhase = 'idle';
+let lastTaskPhaseUpdatedAt = 0;
+let lastConfirmRequest: { confirmId: string; question: string; options?: string[] } | null = null;
+let showRawSummary = false;
 
 const layoutState = {
   chat: 34,
@@ -168,6 +192,51 @@ function persistExpandedFolders() {
   localStorage.setItem('expandedFolders', JSON.stringify([...expandedFolders]));
 }
 
+function toastHost(): HTMLElement {
+  const host = document.querySelector<HTMLElement>('#toastHost');
+  if (!host) throw new Error('toastHost not found');
+  return host;
+}
+
+function showToast(opts: {
+  kind: 'info' | 'warn' | 'error';
+  title: string;
+  message: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  timeoutMs?: number;
+}) {
+  const host = toastHost();
+  const node = document.createElement('div');
+  node.className = `toast ${opts.kind}`;
+  node.innerHTML = `
+    <div>
+      <p class="toast-title"></p>
+      <p class="toast-msg"></p>
+    </div>
+    <div class="toast-actions">
+      ${opts.actionLabel ? `<button type="button" class="ghost-button toast-action"></button>` : ''}
+      <button type="button" class="toast-close" aria-label="关闭">关闭</button>
+    </div>
+  `;
+  (node.querySelector('.toast-title') as HTMLElement).textContent = opts.title;
+  (node.querySelector('.toast-msg') as HTMLElement).textContent = opts.message;
+  const close = () => node.remove();
+  node.querySelector<HTMLButtonElement>('.toast-close')!.addEventListener('click', close);
+  const actionBtn = node.querySelector<HTMLButtonElement>('.toast-action');
+  if (actionBtn && opts.actionLabel) {
+    actionBtn.textContent = opts.actionLabel;
+    actionBtn.addEventListener('click', () => {
+      try { opts.onAction?.(); } finally { close(); }
+    });
+  }
+  host.appendChild(node);
+  const timeout = opts.timeoutMs ?? (opts.kind === 'error' ? 8000 : 4500);
+  window.setTimeout(() => {
+    if (node.isConnected) close();
+  }, timeout);
+}
+
 function setSaveState(next: SaveState, detail?: string) {
   saveState = next;
   editorSaveBadge.dataset.state = next;
@@ -188,6 +257,199 @@ function setSaveState(next: SaveState, detail?: string) {
   } else {
     editorSaveBadge.title = detail ?? editorSaveBadge.textContent ?? '';
     if (next !== 'error') lastSaveError = null;
+  }
+}
+
+const TASK_PHASES: Array<{ key: UiTaskPhase; label: string }> = [
+  { key: 'planning', label: '规划' },
+  { key: 'context_loading', label: '加载上下文' },
+  { key: 'editing', label: '修改文件' },
+  { key: 'validating', label: '验证' },
+  { key: 'waiting_user', label: '等待确认' },
+  { key: 'succeeded', label: '完成' },
+];
+
+function setTaskPhase(phase: UiTaskPhase, detail?: string) {
+  lastTaskPhase = phase;
+  lastTaskPhaseUpdatedAt = Date.now();
+  renderTaskStatusSteps(detail);
+  renderWaitingUserPanel();
+}
+
+function renderTaskStatusSteps(detail?: string) {
+  const phaseIndex = TASK_PHASES.findIndex((p) => p.key === lastTaskPhase);
+  taskStatusSteps.innerHTML = '';
+  TASK_PHASES.forEach((p, idx) => {
+    const pill = document.createElement('span');
+    pill.className = 'step-pill';
+    pill.textContent = p.label;
+    if (lastTaskPhase === 'failed') {
+      if (idx === 0) pill.classList.add('error');
+    } else if (phaseIndex >= 0) {
+      if (idx < phaseIndex) pill.classList.add('done');
+      if (idx === phaseIndex) pill.classList.add('active');
+    }
+    taskStatusSteps.appendChild(pill);
+  });
+  retryLastTaskBtn.disabled = !lastUserPrompt || agentStatus !== 'idle';
+  retryLastTaskBtn.title = lastUserPrompt ? `重试：${lastUserPrompt}` : '暂无可重试任务';
+  if (detail) {
+    retryLastTaskBtn.title = `${retryLastTaskBtn.title}\n${detail}`;
+  }
+}
+
+function renderWaitingUserPanel() {
+  const visible = lastTaskPhase === 'waiting_user' && !!lastConfirmRequest;
+  waitingUserPanel.classList.toggle('hidden', !visible);
+  if (!visible) {
+    waitingUserQuestion.textContent = '';
+    waitingUserActions.innerHTML = '';
+    return;
+  }
+
+  waitingUserQuestion.textContent = lastConfirmRequest!.question;
+  waitingUserActions.innerHTML = '';
+
+  const confirmId = lastConfirmRequest!.confirmId;
+  const options = lastConfirmRequest!.options ?? [];
+
+  const submit = async (answer: string) => {
+    const trimmed = answer.trim();
+    if (!trimmed) {
+      showToast({ kind: 'warn', title: '请输入确认内容', message: '回答不能为空。' });
+      return;
+    }
+    try {
+      await fetch('/api/agent/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmId, answer: trimmed }),
+      });
+      showToast({ kind: 'info', title: '已提交确认', message: trimmed });
+      lastConfirmRequest = null;
+      if (agentStatus === 'waiting_confirm') setAgentStatus('running');
+      setTaskPhase('planning', '已提交确认，等待继续执行');
+    } catch (err) {
+      showToast({ kind: 'error', title: '提交确认失败', message: (err as Error).message });
+    }
+  };
+
+  if (options.length > 0) {
+    options.forEach((opt) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'confirm-option-btn';
+      btn.textContent = opt;
+      btn.addEventListener('click', () => submit(opt));
+      waitingUserActions.appendChild(btn);
+    });
+    return;
+  }
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = '输入你的确认/补充信息…';
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submit(input.value);
+    }
+  });
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'confirm-submit-btn';
+  btn.textContent = '提交';
+  btn.addEventListener('click', () => submit(input.value));
+  waitingUserActions.appendChild(input);
+  waitingUserActions.appendChild(btn);
+}
+
+function normalizeToolResults(result: PreviewResult | null): Array<{ name: string; ok?: boolean; file?: unknown }> {
+  if (!result) return [];
+  const raw = result.toolResults ?? result.data?.toolResults ?? [];
+  return raw.map((item) => ({
+    name: item.name,
+    ok: item.result?.ok,
+    file: item.result?.file,
+  }));
+}
+
+function renderStructuredSummary(result: PreviewResult | null) {
+  const toolResults = normalizeToolResults(result);
+
+  const changedFiles = new Set<string>();
+  for (const t of toolResults) {
+    const file = t.file as { path?: string } | undefined;
+    if (file?.path) changedFiles.add(file.path);
+  }
+  (result?.changedFiles ?? []).forEach((p) => changedFiles.add(p));
+
+  const writeOk = toolResults.some((t) => t.name === 'write_file' && t.ok);
+  const commandOk = toolResults.some((t) => t.name === 'run_command' && t.ok);
+  const hasErrors = lastTaskPhase === 'failed';
+
+  structuredSummary.innerHTML = '';
+
+  const mkRow = (key: string, valueNode: HTMLElement) => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'structured-row';
+    const k = document.createElement('div');
+    k.className = 'structured-key';
+    k.textContent = key;
+    wrapper.appendChild(k);
+    wrapper.appendChild(valueNode);
+    structuredSummary.appendChild(wrapper);
+  };
+
+  const mkValue = (text: string) => {
+    const div = document.createElement('div');
+    div.className = 'structured-value';
+    div.textContent = text;
+    return div;
+  };
+
+  const mkTags = (items: Array<{ text: string; kind?: 'ok' | 'warn' | 'err' }>) => {
+    const list = document.createElement('div');
+    list.className = 'structured-list';
+    items.forEach((it) => {
+      const tag = document.createElement('span');
+      tag.className = `tag${it.kind ? ` ${it.kind}` : ''}`;
+      tag.textContent = it.text;
+      list.appendChild(tag);
+    });
+    const outer = document.createElement('div');
+    outer.className = 'structured-value';
+    outer.appendChild(list);
+    return outer;
+  };
+
+  if (!result) {
+    mkRow('状态', mkValue('暂无摘要（等待任务运行）。'));
+    return;
+  }
+
+  mkRow('当前阶段', mkValue(lastTaskPhase));
+  mkRow('结果概览', mkTags([
+    { text: writeOk ? '文件已写入' : '未写入文件', kind: writeOk ? 'ok' : 'warn' },
+    { text: commandOk ? '命令已执行' : '未执行命令', kind: commandOk ? 'ok' : 'warn' },
+    { text: hasErrors ? '存在错误' : '无错误', kind: hasErrors ? 'err' : 'ok' },
+  ]));
+
+  if (changedFiles.size > 0) {
+    mkRow('变更文件', mkValue([...changedFiles].join('\n')));
+  }
+
+  if (typeof result.summary === 'string' && result.summary.trim()) {
+    mkRow('摘要', mkValue(result.summary.trim()));
+  } else if (typeof result.output === 'string' && result.output.trim()) {
+    mkRow('输出', mkValue(result.output.trim()));
+  }
+
+  if (toolResults.length > 0) {
+    const brief = toolResults
+      .map((t) => `${t.name}${t.ok === undefined ? '' : t.ok ? ' ✅' : ' ❌'}`)
+      .join(' / ');
+    mkRow('工具调用', mkValue(brief));
   }
 }
 
@@ -244,6 +506,7 @@ async function fetchSuggestions(prefix: string): Promise<string[]> {
     const data = await res.json() as { suggestions?: string[] };
     return data.suggestions ?? [];
   } catch {
+    showToast({ kind: 'warn', title: '路径补全失败', message: '无法获取路径建议，请检查后端是否运行。' });
     return [];
   }
 }
@@ -317,6 +580,7 @@ loadWorkspaceBtn.addEventListener('click', async () => {
 
     if (!data.ok) {
       setWorkspaceError(data.error ?? '加载失败');
+      showToast({ kind: 'error', title: '加载工作区失败', message: data.error ?? '未知错误' });
       return;
     }
 
@@ -336,8 +600,10 @@ loadWorkspaceBtn.addEventListener('click', async () => {
     editor.value = '';
     currentFileContent = '';
     appendMessage('agent', `已加载工作区：${path}`);
+    showToast({ kind: 'info', title: '工作区已加载', message: path });
   } catch (err) {
     setWorkspaceError(`请求失败：${(err as Error).message}`);
+    showToast({ kind: 'error', title: '加载工作区失败', message: (err as Error).message });
   } finally {
     loadWorkspaceBtn.disabled = false;
     loadWorkspaceBtn.textContent = '加载';
@@ -356,6 +622,7 @@ function setAgentStatus(status: AgentStatusState) {
   const submitBtn = chatForm.querySelector<HTMLButtonElement>('button[type="submit"]')!;
   submitBtn.disabled = status !== 'idle';
   promptInput.disabled = status !== 'idle';
+  renderTaskStatusSteps();
 }
 
 function renderMarkdown(text: string): string {
@@ -438,6 +705,10 @@ async function submitConfirm(confirmId: string, answer: string, card: HTMLElemen
     const actionsEl = card.querySelector('.confirm-actions');
     if (actionsEl) {
       actionsEl.innerHTML = `<span class="confirm-answer">已回答：${answer}</span>`;
+    }
+    if (lastConfirmRequest?.confirmId === confirmId) {
+      lastConfirmRequest = null;
+      renderWaitingUserPanel();
     }
   } catch {
     appendMessage('agent', `提交确认失败`);
@@ -834,13 +1105,24 @@ function scheduleWorkspaceRefresh(delayMs = 0) {
 }
 
 async function openFile(path: string) {
-  const res = await fetch(`/api/file/${encodeURIComponent(path)}`);
-  const file = await res.json();
-  selectedFile = path;
-  currentFile.textContent = path;
-  currentFileContent = file.content ?? '';
-  editor.value = currentFileContent;
-  setSaveState('saved');
+  try {
+    const res = await fetch(`/api/file/${encodeURIComponent(path)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const file = await res.json() as { content?: string };
+    selectedFile = path;
+    currentFile.textContent = path;
+    currentFileContent = file.content ?? '';
+    editor.value = currentFileContent;
+    setSaveState('saved');
+  } catch (err) {
+    showToast({
+      kind: 'error',
+      title: '打开文件失败',
+      message: `${path}\n${(err as Error).message}`,
+      actionLabel: '重试',
+      onAction: () => openFile(path),
+    });
+  }
 }
 
 function updateTreeEmptyState() {
@@ -861,6 +1143,7 @@ async function initSession() {
     }
   } catch {
     sessionBadge.textContent = '会话加载失败';
+    showToast({ kind: 'warn', title: '会话加载失败', message: '无法获取会话信息，后端可能未启动。' });
   }
 }
 
@@ -978,6 +1261,8 @@ async function createNewSession() {
 }
 
 async function streamChat(prompt: string) {
+  lastUserPrompt = prompt;
+  setTaskPhase('planning', '已发送请求，等待 Agent 规划');
   const response = await fetch('/api/agent/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1089,9 +1374,13 @@ async function streamChat(prompt: string) {
         } else if (event.type === 'result') {
           finalResult = event.result as PreviewResult;
           setAgentStatus('idle');
+          setTaskPhase('succeeded');
+          renderStructuredSummary(finalResult);
         } else if (event.type === 'error') {
           updateAssistant(`出错了：${event.message}`);
           setAgentStatus('idle');
+          setTaskPhase('failed', event.message);
+          renderStructuredSummary(finalResult);
         } else if (event.type === 'session') {
           currentSessionId = event.sessionId;
           const shortId = event.sessionId.replace('session-', '').slice(-6);
@@ -1108,8 +1397,20 @@ async function streamChat(prompt: string) {
           if (statusMap[event.status]) {
             setAgentStatus(statusMap[event.status] as AgentStatusState);
           }
+          const phaseMap: Record<string, UiTaskPhase> = {
+            planning: 'planning',
+            executing: 'editing',
+            summarizing: 'validating',
+            waiting_confirm: 'waiting_user',
+            done: 'succeeded',
+            error: 'failed',
+          };
+          if (phaseMap[event.status]) setTaskPhase(phaseMap[event.status], `状态：${event.status}`);
         } else if (event.type === 'confirm_request') {
           setAgentStatus('waiting_confirm');
+          setTaskPhase('waiting_user');
+          lastConfirmRequest = { confirmId: event.confirmId, question: event.question, options: event.options };
+          renderWaitingUserPanel();
           renderConfirmCard(event);
         }
       } catch {
@@ -1143,10 +1444,38 @@ chatForm.addEventListener('submit', async (event) => {
   try {
     const result = await streamChat(prompt);
     summary.textContent = JSON.stringify(result, null, 2);
+    renderStructuredSummary(result);
   } catch (error) {
     appendMessage('agent', `请求失败：${(error as Error).message}`);
+    setTaskPhase('failed', (error as Error).message);
+    renderStructuredSummary(null);
+    showToast({
+      kind: 'error',
+      title: '任务执行失败',
+      message: (error as Error).message,
+      actionLabel: lastUserPrompt ? '重试' : undefined,
+      onAction: () => {
+        if (lastUserPrompt) {
+          promptInput.value = lastUserPrompt;
+          chatForm.requestSubmit();
+        }
+      },
+      timeoutMs: 9000,
+    });
     setAgentStatus('idle');
   }
+});
+
+retryLastTaskBtn.addEventListener('click', () => {
+  if (!lastUserPrompt || agentStatus !== 'idle') return;
+  promptInput.value = lastUserPrompt;
+  chatForm.requestSubmit();
+});
+
+toggleRawSummaryBtn.addEventListener('click', () => {
+  showRawSummary = !showRawSummary;
+  summary.classList.toggle('hidden', !showRawSummary);
+  toggleRawSummaryBtn.textContent = showRawSummary ? '隐藏原始' : '查看原始';
 });
 
 newSessionBtn.addEventListener('click', createNewSession);
@@ -1183,3 +1512,7 @@ loadExpandedFolders();
 loadWorkspace();
 initSession();
 appendMessage('agent', 'MVP 已启动：你可以先浏览文件树，再输入一个需求开始。');
+setTaskPhase('idle');
+renderStructuredSummary(null);
+summary.classList.add('hidden');
+toggleRawSummaryBtn.textContent = '查看原始';

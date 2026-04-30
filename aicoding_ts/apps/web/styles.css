@@ -436,6 +436,194 @@ textarea {
   overflow: auto;
   max-height: 360px;
 }
+.task-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+.task-status-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.step-pill {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-border);
+  background: rgba(255,255,255,0.05);
+  color: var(--muted);
+}
+.step-pill.active {
+  color: var(--accent-2);
+  border-color: rgba(34, 211, 238, 0.35);
+  background: rgba(34, 211, 238, 0.10);
+}
+.step-pill.done {
+  color: #22c55e;
+  border-color: rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.10);
+}
+.step-pill.error {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.10);
+}
+
+.toast-host {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 2000;
+  width: min(420px, calc(100vw - 32px));
+}
+.toast {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: start;
+  border-radius: 16px;
+  padding: 12px 12px 12px 14px;
+  background: rgba(15, 23, 42, 0.98);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+.toast-title {
+  font-weight: 700;
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+.toast-msg {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.toast-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+.toast .toast-close {
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.05);
+}
+.toast.info { border-left: 3px solid var(--accent-2); }
+.toast.warn { border-left: 3px solid #facc15; }
+.toast.error { border-left: 3px solid #ef4444; }
+
+.waiting-user-panel {
+  margin-top: 12px;
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(250, 204, 21, 0.07);
+  border: 1px solid rgba(250, 204, 21, 0.28);
+}
+.waiting-user-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+.waiting-user-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+.waiting-user-question {
+  color: var(--text);
+  line-height: 1.6;
+  margin-bottom: 10px;
+  white-space: pre-wrap;
+}
+.waiting-user-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.waiting-user-actions input {
+  flex: 1;
+  min-width: 180px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(2, 6, 23, 0.55);
+  color: var(--text);
+  padding: 10px 12px;
+  outline: none;
+  font: inherit;
+}
+.waiting-user-actions button {
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+.structured-summary {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(2, 6, 23, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  color: var(--text);
+  display: grid;
+  gap: 10px;
+}
+.structured-row {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+.structured-key {
+  color: var(--muted);
+  font-size: 12px;
+}
+.structured-value {
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+.structured-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tag {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(255,255,255,0.05);
+  color: var(--muted);
+  font-family: Consolas, monospace;
+}
+.tag.ok { color: #22c55e; border-color: rgba(34, 197, 94, 0.35); background: rgba(34, 197, 94, 0.10); }
+.tag.warn { color: #facc15; border-color: rgba(250, 204, 21, 0.35); background: rgba(250, 204, 21, 0.10); }
+.tag.err { color: #ef4444; border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.10); }
+.structured-divider {
+  height: 1px;
+  background: rgba(148, 163, 184, 0.14);
+}
+
+@media (max-width: 720px) {
+  .structured-row { grid-template-columns: 1fr; }
+}
 .panel-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .editor-header-right { display: inline-flex; align-items: center; gap: 10px; }
 .save-badge {
