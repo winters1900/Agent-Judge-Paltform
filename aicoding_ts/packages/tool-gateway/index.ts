@@ -14,6 +14,9 @@ type WorkspaceManager = {
   listFiles: () => WorkspaceFile[];
   searchInWorkspace: (query: string, path?: string) => unknown[];
   patchFile: (path: string, patch: string) => Promise<unknown> | unknown;
+  listVersions: () => Promise<unknown[]>;
+  createSnapshot: (name?: string, description?: string) => Promise<unknown>;
+  restoreSnapshot: (snapshotId: string) => Promise<unknown>;
   loadFromDisk: () => Promise<unknown>;
 };
 
@@ -136,6 +139,36 @@ function buildToolDefinitions(workspaceManager: WorkspaceManager) {
         return trim(tree);
       },
     },
+    {
+      name: 'list_versions',
+      description: '列出当前工作区的版本快照',
+      inputSchema: buildInputSchema({}, []),
+      handler: () => workspaceManager.listVersions(),
+    },
+    {
+      name: 'create_snapshot',
+      description: '为当前工作区创建一个可回滚的版本快照',
+      inputSchema: buildInputSchema(
+        {
+          name: { type: 'string' },
+          description: { type: 'string' },
+        },
+        [],
+      ),
+      handler: ({ name, description }: Record<string, unknown>) =>
+        workspaceManager.createSnapshot(String(name ?? ''), String(description ?? '')),
+    },
+    {
+      name: 'restore_snapshot',
+      description: '从指定版本快照恢复当前工作区',
+      inputSchema: buildInputSchema(
+        {
+          snapshotId: { type: 'string', minLength: 1 },
+        },
+        ['snapshotId'],
+      ),
+      handler: ({ snapshotId }: Record<string, unknown>) => workspaceManager.restoreSnapshot(String(snapshotId ?? '')),
+    },
   ];
 }
 
@@ -224,6 +257,15 @@ export function createToolGateway(workspaceManager: WorkspaceManager) {
     },
     patchFile(path: string, patch: string) {
       return workspaceManager.patchFile(path, patch);
+    },
+    listVersions() {
+      return workspaceManager.listVersions();
+    },
+    createSnapshot(name?: string, description?: string) {
+      return workspaceManager.createSnapshot(name, description);
+    },
+    restoreSnapshot(snapshotId: string) {
+      return workspaceManager.restoreSnapshot(snapshotId);
     },
     async runCommand(command: string) {
       return new Promise((resolve) => {

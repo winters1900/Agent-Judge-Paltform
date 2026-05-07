@@ -863,13 +863,96 @@ textarea {
 .preview-key { color: var(--muted); font-size: 12px; }
 .preview-val { color: var(--text); font-size: 13px; white-space: pre-wrap; }
 .muted { color: var(--muted); }
+
+.version-card {
+  margin-top: 12px;
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+.version-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.version-card-header div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+}
+.version-card-header span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.version-list {
+  display: grid;
+  gap: 10px;
+}
+.version-empty {
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px dashed rgba(148, 163, 184, 0.22);
+  color: var(--muted);
+  line-height: 1.5;
+}
+.version-item {
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+.version-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.version-item-title {
+  font-weight: 600;
+  line-height: 1.35;
+}
+.version-item-id {
+  color: var(--accent-2);
+  font-size: 12px;
+  font-family: Consolas, monospace;
+}
+.version-item-description {
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 10px;
+  white-space: pre-wrap;
+}
+.version-item-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+.version-item-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.version-restore-btn {
+  border-radius: 10px;
+  padding: 8px 12px;
+}
 .panel-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .panel-header h2 {
   font-size: 14px;
   letter-spacing: 0.02em;
 }
 .panel-header span { color: var(--muted); font-size: 12px; }
-.editor-header-right { display: inline-flex; align-items: center; gap: 10px; }
+.editor-header-right { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.editor-snapshot-btn {
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
 .save-badge {
   font-size: 12px;
   border-radius: 999px;
@@ -1051,6 +1134,19 @@ textarea {
   padding: 12px 14px;
   outline: none;
   margin-bottom: 14px;
+}
+.tree-dialog textarea {
+  width: 100%;
+  min-height: 100px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(2, 6, 23, 0.55);
+  color: var(--text);
+  padding: 12px 14px;
+  outline: none;
+  margin-bottom: 14px;
+  resize: vertical;
+  font: inherit;
 }
 .tree-dialog-actions {
   display: flex;

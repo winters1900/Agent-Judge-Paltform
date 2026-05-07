@@ -9,6 +9,9 @@ type ToolGateway = {
   listWorkspace: () => unknown;
   searchInWorkspace: (query: string, path?: string) => unknown;
   patchFile: (path: string, patch: string) => unknown;
+  listVersions: () => unknown;
+  createSnapshot: (name?: string, description?: string) => unknown;
+  restoreSnapshot: (snapshotId: string) => unknown;
 };
 
 type ExternalMcpRegistry = {
@@ -123,6 +126,42 @@ const LOCAL_TOOL_DEFINITIONS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'list_versions',
+      description: '列出当前工作区的版本快照',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_snapshot',
+      description: '为当前工作区创建一个可回滚的版本快照',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          description: { type: 'string' },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'restore_snapshot',
+      description: '从指定版本快照恢复当前工作区',
+      parameters: {
+        type: 'object',
+        properties: { snapshotId: { type: 'string' } },
+        required: ['snapshotId'],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 function extractText(message: unknown): string {
@@ -166,6 +205,9 @@ export function createExecutor(toolGateway: ToolGateway, externalMcpRegistry?: E
     search_in_workspace: ({ query, path }) => toolGateway.searchInWorkspace(query as string, path as string | undefined),
     run_command: ({ command }) => toolGateway.runCommand(command as string),
     list_workspace: () => toolGateway.listWorkspace(),
+    list_versions: () => toolGateway.listVersions(),
+    create_snapshot: ({ name, description }) => toolGateway.createSnapshot(name as string | undefined, description as string | undefined),
+    restore_snapshot: ({ snapshotId }) => toolGateway.restoreSnapshot(snapshotId as string),
   };
 
   async function buildToolDefinitions() {
@@ -270,6 +312,8 @@ export function createExecutor(toolGateway: ToolGateway, externalMcpRegistry?: E
 
             if (toolName === 'write_file' || toolName === 'patch_file') {
               if (typeof args.path === 'string') filesModified.push(args.path);
+            } else if (toolName === 'restore_snapshot') {
+              filesModified.push('[workspace restored from snapshot]');
             }
           }
 

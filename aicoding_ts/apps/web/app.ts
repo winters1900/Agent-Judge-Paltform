@@ -6,6 +6,9 @@ const editor = document.querySelector<HTMLTextAreaElement>('#editor')!;
 const currentFile = document.querySelector<HTMLElement>('#currentFile')!;
 const editorSaveBadge = document.querySelector<HTMLElement>('#editorSaveBadge')!;
 const summary = document.querySelector<HTMLElement>('#summary')!;
+const snapshotBtn = document.querySelector<HTMLButtonElement>('#snapshotBtn')!;
+const versionList = document.querySelector<HTMLElement>('#versionList')!;
+const versionStatus = document.querySelector<HTMLElement>('#versionStatus')!;
 const taskStatusSteps = document.querySelector<HTMLElement>('#taskStatusSteps')!;
 const retryLastTaskBtn = document.querySelector<HTMLButtonElement>('#retryLastTaskBtn')!;
 const waitingUserPanel = document.querySelector<HTMLElement>('#waitingUserPanel')!;
@@ -56,6 +59,19 @@ type PreviewResult = {
   commands?: Array<{ command: string; exitCode?: number; cwd?: string }>;
 };
 
+type VersionSnapshot = {
+  id: string;
+  name: string;
+  description: string;
+  snapshotPath: string;
+  createdAt: string;
+};
+
+type SnapshotDialogResult = {
+  name: string;
+  description: string;
+};
+
 type AgentStatusState = 'idle' | 'running' | 'waiting_confirm';
 type SaveState = 'idle' | 'saved' | 'dirty' | 'saving' | 'error';
 type UiTaskPhase =
@@ -71,6 +87,7 @@ type UiTaskPhase =
 let selectedFile: string | null = null;
 let currentFileContent = '';
 let workspaceCache: WorkspaceNode[] = [];
+let versionsCache: VersionSnapshot[] = [];
 let currentAutoRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let editorSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let expandedFolders = new Set<string>();
@@ -322,6 +339,12 @@ function formatTime(ts: number): string {
   const mm = String(d.getMinutes()).padStart(2, '0');
   const ss = String(d.getSeconds()).padStart(2, '0');
   return `${hh}:${mm}:${ss}`;
+}
+
+function formatVersionTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', { hour12: false });
 }
 
 function renderTimeline() {
@@ -663,6 +686,7 @@ loadWorkspaceBtn.addEventListener('click', async () => {
     saveWorkspaceHistory(path);
     workspaceCache = data.tree ?? [];
     renderTree(workspaceCache);
+    await loadVersions();
 
     if (data.sessionId) {
       currentSessionId = data.sessionId;
@@ -881,6 +905,50 @@ function showConfirmDialog({ title, message, confirmLabel = '确认', danger = f
   });
 }
 
+function showSnapshotDialog() {
+  return new Promise<SnapshotDialogResult | null>((resolve) => {
+    let dialog = document.querySelector<HTMLElement>('#snapshotDialog');
+    if (!dialog) {
+      dialog = document.createElement('div');
+      dialog.id = 'snapshotDialog';
+      dialog.className = 'tree-dialog-overlay';
+      dialog.innerHTML = `
+        <div class="tree-dialog">
+          <h3>创建快照</h3>
+          <p>为当前工作区保存一个可回滚版本。</p>
+          <input data-role="name" type="text" placeholder="快照名称（可选）" />
+          <textarea data-role="description" rows="4" placeholder="快照描述（可选）"></textarea>
+          <div class="tree-dialog-actions">
+            <button type="button" data-role="cancel">取消</button>
+            <button type="button" data-role="confirm">创建</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(dialog);
+    }
+
+    const nameInput = dialog.querySelector<HTMLInputElement>('[data-role="name"]')!;
+    const descriptionInput = dialog.querySelector<HTMLTextAreaElement>('[data-role="description"]')!;
+    nameInput.value = '';
+    descriptionInput.value = '';
+    dialog.classList.add('visible');
+    nameInput.focus();
+
+    const cleanup = () => dialog!.classList.remove('visible');
+    dialog.querySelector<HTMLButtonElement>('[data-role="cancel"]')!.onclick = () => {
+      cleanup();
+      resolve(null);
+    };
+    dialog.querySelector<HTMLButtonElement>('[data-role="confirm"]')!.onclick = () => {
+      cleanup();
+      resolve({
+        name: nameInput.value.trim(),
+        description: descriptionInput.value.trim(),
+      });
+    };
+  });
+}
+
 function showRenameDialog(currentPath: string) {
   return new Promise<string | null>((resolve) => {
     let dialog = document.querySelector<HTMLElement>('#treeRenameDialog');
@@ -962,6 +1030,43 @@ function saveCurrentFile() {
       appendMessage('agent', `保存失败：${(err as Error).message}`);
     }
   }, 300);
+}
+
+function cancelPendingEditorSave() {
+  if (editorSaveTimer) {
+    clearTimeout(editorSaveTimer);
+    editorSaveTimer = null;
+  }
+}
+
+async function flushPendingEditorSave() {
+  if (!selectedFile || editor.value === currentFileContent) return;
+  cancelPendingEditorSave();
+  setSaveState('saving');
+  const res = await fetch('/api/file', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: selectedFile, content: editor.value }),
+  });
+  const data = await res.json() as { ok?: boolean; tree?: WorkspaceNode[]; error?: string };
+  if (!res.ok || data.ok === false) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  currentFileContent = editor.value;
+  workspaceCache = data.tree || workspaceCache;
+  renderTree(workspaceCache);
+  setSaveState('saved');
+}
+
+function findNodeByPath(nodes: WorkspaceNode[], path: string): WorkspaceNode | null {
+  for (const node of nodes) {
+    if (node.path === path) return node;
+    if (node.type === 'folder') {
+      const found = findNodeByPath(node.children ?? [], path);
+      if (found) return found;
+    }
+  }
+  return null;
 }
 
 function showCreateNameDialog(kind: 'file' | 'folder') {
@@ -1189,6 +1294,138 @@ function scheduleWorkspaceRefresh(delayMs = 0) {
   currentAutoRefreshTimer = setTimeout(() => {
     loadWorkspace();
   }, delayMs);
+}
+
+function renderVersions(versions: VersionSnapshot[]) {
+  versionsCache = versions;
+  versionStatus.textContent = `${versions.length} 个版本`;
+  versionList.innerHTML = '';
+
+  if (versions.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'version-empty';
+    empty.textContent = '还没有快照。创建一个快照后，就可以在这里查看和回滚版本。';
+    versionList.appendChild(empty);
+    return;
+  }
+
+  versions.forEach((version) => {
+    const item = document.createElement('article');
+    item.className = 'version-item';
+    item.innerHTML = `
+      <div class="version-item-header">
+        <div>
+          <div class="version-item-title"></div>
+          <div class="version-item-id"></div>
+        </div>
+      </div>
+      <div class="version-item-description"></div>
+      <div class="version-item-meta"></div>
+      <div class="version-item-actions">
+        <button type="button" class="version-restore-btn">回滚到此版本</button>
+      </div>
+    `;
+    item.querySelector<HTMLElement>('.version-item-title')!.textContent = version.name;
+    item.querySelector<HTMLElement>('.version-item-id')!.textContent = version.id;
+    item.querySelector<HTMLElement>('.version-item-description')!.textContent = version.description || '无描述';
+    item.querySelector<HTMLElement>('.version-item-meta')!.textContent = `创建时间：${formatVersionTime(version.createdAt)}`;
+    item.querySelector<HTMLButtonElement>('.version-restore-btn')!.addEventListener('click', () => {
+      restoreSnapshot(version.id);
+    });
+    versionList.appendChild(item);
+  });
+}
+
+async function loadVersions() {
+  try {
+    const res = await fetch('/api/versions');
+    const data = await res.json() as { versions?: VersionSnapshot[] };
+    renderVersions(data.versions || []);
+  } catch {
+    versionStatus.textContent = '加载失败';
+    versionList.innerHTML = '<div class="version-empty">版本列表加载失败，请稍后重试。</div>';
+  }
+}
+
+async function syncSelectedFileAfterWorkspaceChange() {
+  if (!selectedFile) return;
+  const exists = findNodeByPath(workspaceCache, selectedFile);
+  if (!exists) {
+    selectedFile = null;
+    currentFile.textContent = '未打开文件';
+    editor.value = '';
+    currentFileContent = '';
+    setSaveState('idle');
+    return;
+  }
+  await openFile(selectedFile);
+}
+
+async function createSnapshot() {
+  try {
+    await flushPendingEditorSave();
+  } catch (error) {
+    showToast({ kind: 'error', title: '保存失败', message: (error as Error).message });
+    return;
+  }
+
+  const input = await showSnapshotDialog();
+  if (!input) return;
+
+  snapshotBtn.disabled = true;
+  snapshotBtn.textContent = '创建中...';
+  try {
+    const res = await fetch('/api/version/snapshot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await res.json() as { ok?: boolean; error?: string; snapshot?: VersionSnapshot; versions?: VersionSnapshot[] };
+    if (!res.ok || data.ok === false) throw new Error(data.error || '创建快照失败');
+    renderVersions(data.versions || []);
+    showToast({ kind: 'info', title: '已创建快照', message: data.snapshot?.id ?? '快照已保存' });
+  } catch (error) {
+    showToast({ kind: 'error', title: '创建快照失败', message: (error as Error).message });
+  } finally {
+    snapshotBtn.disabled = false;
+    snapshotBtn.textContent = '创建快照';
+  }
+}
+
+async function restoreSnapshot(snapshotId: string) {
+  cancelPendingEditorSave();
+  const target = versionsCache.find((item) => item.id === snapshotId);
+  const confirmed = await showConfirmDialog({
+    title: '回滚确认',
+    message: `确定回滚到 ${target?.name || snapshotId} 吗？当前工作区会被覆盖。`,
+    confirmLabel: '回滚',
+    danger: true,
+  });
+  if (!confirmed) return;
+
+  try {
+    const res = await fetch('/api/version/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ snapshotId }),
+    });
+    const data = await res.json() as {
+      ok?: boolean;
+      error?: string;
+      tree?: WorkspaceNode[];
+      versions?: VersionSnapshot[];
+      restoredVersion?: VersionSnapshot;
+    };
+    if (!res.ok || data.ok === false) throw new Error(data.error || '回滚失败');
+    workspaceCache = data.tree || [];
+    renderTree(workspaceCache);
+    renderVersions(data.versions || []);
+    await syncSelectedFileAfterWorkspaceChange();
+    summary.textContent = JSON.stringify(data.restoredVersion ?? data, null, 2);
+    showToast({ kind: 'info', title: '已回滚', message: `已回滚到快照 ${snapshotId}` });
+  } catch (error) {
+    showToast({ kind: 'error', title: '回滚失败', message: (error as Error).message });
+  }
 }
 
 async function openFile(path: string) {
@@ -1781,6 +2018,9 @@ sessionBadge.addEventListener('click', (e) => {
   }
 });
 refreshBtn.addEventListener('click', loadWorkspace);
+snapshotBtn.addEventListener('click', () => {
+  createSnapshot();
+});
 newItemBtn.addEventListener('click', (event) => {
   event.stopPropagation();
   toggleNewItemMenu();
@@ -1803,6 +2043,7 @@ applyLayoutWidths();
 initResizers();
 loadExpandedFolders();
 loadWorkspace();
+loadVersions();
 
 // 添加模板生成按钮到新建菜单
 const newItemMenuElement = newItemMenu;

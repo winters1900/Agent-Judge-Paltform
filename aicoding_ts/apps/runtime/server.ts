@@ -18,6 +18,9 @@ type RequestContext = {
   command?: string;
   prompt?: string;
   selectedFile?: string | null;
+  name?: string;
+  description?: string;
+  snapshotId?: string;
 };
 
 type WorkspaceFile = {
@@ -27,6 +30,10 @@ type WorkspaceFile = {
 
 type WorkspaceTreeResponse = {
   tree: unknown[];
+};
+
+type VersionListResponse = {
+  versions: unknown[];
 };
 
 type FileUpdateResponse = {
@@ -323,6 +330,12 @@ export function startRuntimeServer() {
       return;
     }
 
+    if (url.pathname === '/api/versions' && req.method === 'GET') {
+      const versionsResponse: VersionListResponse = { versions: await workspaceManager.listVersions() };
+      sendJson(res, 200, versionsResponse);
+      return;
+    }
+
     // ── MCP tool/resource/prompt 辅助路由 ──
     if (url.pathname === '/api/mcp/tools') {
       sendJson(res, 200, toolGateway.mcp.listTools());
@@ -453,6 +466,28 @@ export function startRuntimeServer() {
       const parsed = await parseBody<RequestContext>(req);
       const result = await agentCore.runCommand(parsed.command ?? '');
       sendJson(res, 200, result);
+      return;
+    }
+
+    if (url.pathname === '/api/version/snapshot' && req.method === 'POST') {
+      const parsed = await parseBody<RequestContext>(req);
+      try {
+        const result = await workspaceManager.createSnapshot(parsed.name ?? '', parsed.description ?? '');
+        sendJson(res, 200, result);
+      } catch (error: unknown) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : 'Failed to create snapshot' });
+      }
+      return;
+    }
+
+    if (url.pathname === '/api/version/restore' && req.method === 'POST') {
+      const parsed = await parseBody<RequestContext>(req);
+      try {
+        const result = await workspaceManager.restoreSnapshot(parsed.snapshotId ?? '');
+        sendJson(res, 200, result);
+      } catch (error: unknown) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : 'Failed to restore snapshot' });
+      }
       return;
     }
 

@@ -53,6 +53,7 @@
             <h2>编辑器</h2>
             <div class="editor-header-right">
               <span id="editorSaveBadge" class="save-badge" data-state="idle" title="未打开文件">未打开</span>
+              <button id="snapshotBtn" type="button" class="ghost-button editor-snapshot-btn">创建快照</button>
               <span>当前文件</span>
             </div>
           </div>
@@ -83,8 +84,10 @@
 
       <section class="panel log-panel">
         <div class="panel-header">
-          <h2>Agent 执行摘要</h2>
-          <span>计划 / 状态 / 结果</span>
+          <div>
+            <h2>Agent 执行摘要</h2>
+            <span>计划 / 状态 / 结果</span>
+          </div>
         </div>
         <div class="task-status-row">
           <div class="task-status-steps" id="taskStatusSteps" aria-label="任务状态"></div>
@@ -128,6 +131,15 @@
             <div class="preview-item"><span class="preview-key">构建错误</span><span class="preview-val muted">未接入</span></div>
           </div>
         </div>
+        <section class="version-card">
+          <div class="version-card-header">
+            <div>
+              <strong>版本快照</strong>
+              <span id="versionStatus">0 个版本</span>
+            </div>
+          </div>
+          <div id="versionList" class="version-list"></div>
+        </section>
         <pre id="summary" class="summary-box"></pre>
       </section>
     </div>

@@ -13,6 +13,14 @@ export interface ErrorResponse {
   error: string;
 }
 
+export interface VersionSnapshot {
+  id: string;
+  name: string;
+  description: string;
+  snapshotPath: string;
+  createdAt: string;
+}
+
 export function createSuccessResponse<T>(data: T): SuccessResponse<T> {
   return {
     ok: true,

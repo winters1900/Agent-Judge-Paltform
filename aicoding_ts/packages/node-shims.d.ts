@@ -14,7 +14,8 @@ declare module 'node:fs' {
     readFile(path: string, options?: string): Promise<string>;
     writeFile(path: string, data: string, options?: string): Promise<void>;
     rename(oldPath: string, newPath: string): Promise<void>;
-    rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
+    rm(path: string, options?: { recursive?: boolean; force?: boolean; maxRetries?: number; retryDelay?: number }): Promise<void>;
+    cp(source: string, destination: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
     stat(path: string): Promise<{ isDirectory(): boolean }>;
     readdir(path: string, options?: { withFileTypes?: boolean }): Promise<Array<string | FsDirent>>;
   };
@@ -24,6 +25,7 @@ declare module 'node:fs/promises' {
   export const readFile: typeof import('node:fs').promises.readFile;
   export const writeFile: typeof import('node:fs').promises.writeFile;
   export const mkdir: typeof import('node:fs').promises.mkdir;
+  export const cp: typeof import('node:fs').promises.cp;
   export const rename: typeof import('node:fs').promises.rename;
   export const rm: typeof import('node:fs').promises.rm;
   export const stat: typeof import('node:fs').promises.stat;
@@ -38,6 +40,7 @@ declare module 'fs/promises' {
   export const readFile: typeof import('node:fs').promises.readFile;
   export const writeFile: typeof import('node:fs').promises.writeFile;
   export const mkdir: typeof import('node:fs').promises.mkdir;
+  export const cp: typeof import('node:fs').promises.cp;
   export const rename: typeof import('node:fs').promises.rename;
   export const rm: typeof import('node:fs').promises.rm;
   export const stat: typeof import('node:fs').promises.stat;
@@ -48,6 +51,7 @@ declare module 'node:path' {
   export function dirname(path: string): string;
   export function extname(path: string): string;
   export function join(...parts: string[]): string;
+  export function relative(from: string, to: string): string;
   export function resolve(...parts: string[]): string;
 }
 
@@ -55,6 +59,7 @@ declare module 'path' {
   export function dirname(path: string): string;
   export function extname(path: string): string;
   export function join(...parts: string[]): string;
+  export function relative(from: string, to: string): string;
   export function resolve(...parts: string[]): string;
 }
 

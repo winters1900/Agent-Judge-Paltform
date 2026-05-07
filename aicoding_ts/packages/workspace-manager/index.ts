@@ -1,6 +1,6 @@
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
-import { DEFAULT_PROJECT_ID } from '../shared/index.ts';
+import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, relative, resolve } from 'node:path';
+import { DEFAULT_PROJECT_ID, type VersionSnapshot } from '../shared/index.ts';
 
 export type WorkspaceSearchHit = {
   path: string;
@@ -32,12 +32,25 @@ export type WorkspaceFile = {
   content?: string;
 };
 
+type WorkspaceManagerState = {
+  tree: TreeNode[];
+  rootDir: string;
+  projectDir: string;
+  snapshotsDir: string;
+  versionsFile: string;
+};
+
 function createDefaultTree(): TreeNode[] {
   return [];
 }
 
 function normalizePath(path: string) {
   return path.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+/g, '/');
+}
+
+function createNodeId(type: 'file' | 'folder', path: string) {
+  const normalized = normalizePath(path);
+  return `${type}-${normalized.replace(/[^\w.-]+/g, '-') || 'root'}`;
 }
 
 function escapeRegExp(value: string) {
@@ -121,7 +134,7 @@ function upsertNode(nodes: TreeNode[], segments: string[], content: string): Tre
   const index = nodes.findIndex((node) => node.name === head);
 
   if (rest.length === 0) {
-    const fileNode: TreeNode = { id: `file-${segments.join('-')}`, name: head, type: 'file', content };
+    const fileNode: TreeNode = { id: createNodeId('file', segments.join('/')), name: head, type: 'file', content };
     if (index >= 0) {
       const existing = nodes[index];
       const next = [...nodes];
@@ -137,7 +150,7 @@ function upsertNode(nodes: TreeNode[], segments: string[], content: string): Tre
   } else if (index >= 0) {
     folderNode = { ...nodes[index], type: 'folder', children: [] };
   } else {
-    folderNode = { id: `folder-${head}`, name: head, type: 'folder', children: [] };
+    folderNode = { id: createNodeId('folder', segments.slice(0, segments.length - rest.length).join('/')), name: head, type: 'folder', children: [] };
   }
 
   const updatedFolder: TreeNode = {
@@ -199,22 +212,115 @@ export function createWorkspaceManager(options: { projectId?: string; rootDir?: 
   const projectId = options.projectId ?? DEFAULT_PROJECT_ID;
   const rootDir = options.rootDir ?? `${process.cwd()}/workspaces/${projectId}/workspace`;
 
-  function resolveWorkspacePath(...parts: string[]) {
-    return [rootDir, ...parts.filter(Boolean)].join('/').replace(/\/+/g, '/');
+  function createVersionPaths(nextRootDir: string) {
+    const projectDir = dirname(nextRootDir);
+    return {
+      projectDir,
+      snapshotsDir: join(projectDir, 'snapshots'),
+      versionsFile: join(projectDir, 'versions.json'),
+    };
   }
-  const state = {
+
+  function resolveWorkspacePath(...parts: string[]) {
+    return [state.rootDir, ...parts.filter(Boolean)].join('/').replace(/\/+/g, '/');
+  }
+  const state: WorkspaceManagerState = {
     tree: options.initialTree ?? createDefaultTree(),
     rootDir,
+    ...createVersionPaths(rootDir),
   };
 
   async function ensureWorkspaceDir() {
     await mkdir(state.rootDir, { recursive: true });
   }
 
+  async function ensureProjectLayout() {
+    await ensureWorkspaceDir();
+    await mkdir(state.snapshotsDir, { recursive: true });
+    try {
+      await stat(state.versionsFile);
+    } catch {
+      await writeFile(state.versionsFile, '[]\n', 'utf8');
+    }
+  }
+
   async function ensureDirectoryNode(dirPath: string) {
     const normalized = normalizePath(dirPath);
     const absolute = `${state.rootDir}/${normalized}`;
     await mkdir(absolute, { recursive: true });
+  }
+
+  async function readVersions(): Promise<VersionSnapshot[]> {
+    await ensureProjectLayout();
+    try {
+      const raw = await readFile(state.versionsFile, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((item): item is VersionSnapshot => {
+        return Boolean(
+          item &&
+          typeof item === 'object' &&
+          typeof item.id === 'string' &&
+          typeof item.name === 'string' &&
+          typeof item.description === 'string' &&
+          typeof item.snapshotPath === 'string' &&
+          typeof item.createdAt === 'string'
+        );
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  async function writeVersions(versions: VersionSnapshot[]) {
+    await ensureProjectLayout();
+    await writeFile(state.versionsFile, `${JSON.stringify(versions, null, 2)}\n`, 'utf8');
+  }
+
+  async function nextSnapshotId() {
+    const versions = await readVersions();
+    const maxId = versions.reduce((max, item) => {
+      const match = /^v(\d+)$/.exec(item.id);
+      const value = match ? Number(match[1]) : 0;
+      return Math.max(max, value);
+    }, 0);
+    return `v${maxId + 1}`;
+  }
+
+  async function removePath(path: string, recursive = false) {
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        await rm(path, { recursive, force: true, maxRetries: 5, retryDelay: 50 });
+        return;
+      } catch (error: unknown) {
+        lastError = error;
+        const code = error && typeof error === 'object' && 'code' in error
+          ? String((error as { code?: string }).code)
+          : '';
+        if (code !== 'EPERM' && code !== 'EBUSY') throw error;
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 120 * (attempt + 1)));
+      }
+    }
+
+    throw lastError;
+  }
+
+  async function copyDirectoryContents(sourceDir: string, targetDir: string) {
+    await mkdir(targetDir, { recursive: true });
+    const entries = await readdir(sourceDir, { withFileTypes: true }) as Array<{ name: string; isDirectory(): boolean }>;
+    for (const entry of entries) {
+      const sourcePath = join(sourceDir, entry.name);
+      const targetPath = join(targetDir, entry.name);
+      if (entry.isDirectory()) {
+        await copyDirectoryContents(sourcePath, targetPath);
+        continue;
+      }
+      const content = await readFile(sourcePath, 'utf8');
+      await mkdir(dirname(targetPath), { recursive: true });
+      await writeFile(targetPath, content, 'utf8');
+    }
   }
 
   function listTree(): TreeNode[] {
@@ -489,7 +595,7 @@ export function createWorkspaceManager(options: { projectId?: string; rootDir?: 
   }
 
   async function loadFromDisk() {
-    await ensureWorkspaceDir();
+    await ensureProjectLayout();
     state.tree = await scanDir(state.rootDir);
     return state.tree;
   }
@@ -503,14 +609,79 @@ export function createWorkspaceManager(options: { projectId?: string; rootDir?: 
     const info = await stat(resolved);
     if (!info.isDirectory()) throw new Error(`不是目录：${resolved}`);
     state.rootDir = resolved;
+    Object.assign(state, createVersionPaths(resolved));
     state.tree = [];
+    await ensureProjectLayout();
     state.tree = await scanDir(state.rootDir);
     return state.tree;
+  }
+
+  async function listVersions() {
+    const versions = await readVersions();
+    return versions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async function createSnapshot(name = '', description = '') {
+    await ensureProjectLayout();
+
+    const snapshotId = await nextSnapshotId();
+    const snapshotDir = join(state.snapshotsDir, snapshotId);
+    const snapshot: VersionSnapshot = {
+      id: snapshotId,
+      name: name.trim() || `Snapshot ${snapshotId}`,
+      description: description.trim(),
+      snapshotPath: normalizePath(relative(state.projectDir, snapshotDir)),
+      createdAt: new Date().toISOString(),
+    };
+
+    await removePath(snapshotDir, true);
+    await cp(state.rootDir, snapshotDir, { recursive: true, force: true });
+
+    const versions = await readVersions();
+    versions.push(snapshot);
+    await writeVersions(versions);
+
+    return {
+      ok: true,
+      snapshot,
+      versions: await listVersions(),
+    };
+  }
+
+  async function restoreSnapshot(snapshotId: string) {
+    await ensureProjectLayout();
+
+    const versions = await readVersions();
+    const snapshot = versions.find((item) => item.id === snapshotId);
+    if (!snapshot) throw new Error(`Snapshot not found: ${snapshotId}`);
+
+    const snapshotDir = resolve(state.projectDir, snapshot.snapshotPath);
+    await stat(snapshotDir);
+    let warning: string | undefined;
+    try {
+      await removePath(state.rootDir, true);
+      await cp(snapshotDir, state.rootDir, { recursive: true, force: true });
+    } catch (error: unknown) {
+      warning = `无法先清空工作区，已改为覆盖恢复：${error instanceof Error ? error.message : String(error)}`;
+      await copyDirectoryContents(snapshotDir, state.rootDir);
+    }
+    state.tree = await scanDir(state.rootDir);
+
+    return {
+      ok: true,
+      restoredVersion: snapshot,
+      tree: listTree(),
+      versions: await listVersions(),
+      ...(warning ? { warning } : {}),
+    };
   }
 
   return {
     projectId,
     rootDir,
+    projectDir: state.projectDir,
+    snapshotsDir: state.snapshotsDir,
+    versionsFile: state.versionsFile,
     getRootDir,
     switchRoot,
     listTree,
@@ -523,5 +694,8 @@ export function createWorkspaceManager(options: { projectId?: string; rootDir?: 
     renameItem,
     deleteItem,
     loadFromDisk,
+    listVersions,
+    createSnapshot,
+    restoreSnapshot,
   };
 }

@@ -37,6 +37,9 @@ type ToolGateway = {
   listWorkspace: () => unknown[];
   searchInWorkspace: (query: string, path?: string) => unknown;
   patchFile: (path: string, patch: string) => unknown;
+  listVersions: () => unknown;
+  createSnapshot: (name?: string, description?: string) => unknown;
+  restoreSnapshot: (snapshotId: string) => unknown;
 };
 
 type SessionStore = {
