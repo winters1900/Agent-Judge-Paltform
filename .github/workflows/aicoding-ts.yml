@@ -1,0 +1,52 @@
+name: aicoding_ts CI
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "aicoding_ts/**"
+      - ".github/workflows/aicoding-ts.yml"
+  pull_request:
+    paths:
+      - "aicoding_ts/**"
+      - ".github/workflows/aicoding-ts.yml"
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: aicoding_ts
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: aicoding_ts/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (full project)
+        run: npm run typecheck
+
+      - name: Lint and verify web bundle (noEmit)
+        run: npm run lint
+
+      - name: Build web (apps/web/dist)
+        run: npm run build:web
+
+      - name: Upload web dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aicoding-ts-web-dist
+          path: aicoding_ts/apps/web/dist/
+          if-no-files-found: error
