@@ -51,8 +51,8 @@ default:
 verify:aicoding_ts:
   stage: verify
   script:
+    # lint 已含根 tsconfig + apps/web；与 typecheck 等价，避免重复跑 tsc
     - npm --prefix "$AICODING_DIR" run lint
-    - npm --prefix "$AICODING_DIR" run typecheck
 
 build:aicoding_ts:
   stage: build

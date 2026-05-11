@@ -8,7 +8,7 @@
     "start": "node --experimental-strip-types server.ts",
     "build:web": "tsc -p apps/web/tsconfig.build.json",
     "dev:web": "tsc -w -p apps/web/tsconfig.build.json",
-    "lint": "node --check server.ts && node --check apps/runtime/server.ts && tsc -p apps/web/tsconfig.build.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit && tsc -p apps/web/tsconfig.build.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
