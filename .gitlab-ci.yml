@@ -35,13 +35,13 @@ default:
 verify:aicoding_ts:
   stage: verify
   script:
-    - npm run lint
-    - npm run typecheck
+    - npm --prefix "$AICODING_DIR" run lint
+    - npm --prefix "$AICODING_DIR" run typecheck
 
 build:aicoding_ts:
   stage: build
   script:
-    - npm run build:web
+    - npm --prefix "$AICODING_DIR" run build:web
   artifacts:
     expire_in: 7 days
     paths:
@@ -78,7 +78,7 @@ deploy:backend:
     - ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
   script:
     - rsync -az --delete --exclude node_modules --exclude apps/web/dist --exclude .git aicoding_ts/ "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
-    - ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_PATH' && npm ci && npm run build:web && (pm2 restart software3 || pm2 start server.ts --name software3 --interpreter node --node-args='--experimental-strip-types')"
+    - ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_PATH' && npm config set registry https://registry.npmmirror.com && npm ci && npm run build:web && (pm2 restart software3 || pm2 start server.ts --name software3 --interpreter node --node-args='--experimental-strip-types')"
 
 deploy:frontend:
   stage: deploy
