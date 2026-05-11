@@ -11,7 +11,7 @@ concurrent = 1
   executor = "shell"
   # 必须：与仓库 .gitlab-ci.yml 中跨平台脚本一致（bash）；需已安装 Git for Windows
   shell = "bash"
-  # 勿加 docker；勿设 DEPLOY_ENABLED：单本机 Runner 时 deploy 关闭，避免 apk。eval:backend 需本机 bash 在 PATH（Git\\bin）
+  # 勿加 docker；勿设 DEPLOY_ENABLED。eval:backend 需 Git\\bin 的 bash，以及 python / python3 / py 之一在 PATH（仅 py 时脚本会用 py -3 -m venv）
   tags = ["linux"]
   builds_dir = "F:\\gitlab-runner-builds"
   cache_dir = "F:\\gitlab-runner-cache"
