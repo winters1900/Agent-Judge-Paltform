@@ -249,7 +249,8 @@ export function createToolGateway(workspaceManager: WorkspaceManager) {
 
   const toolRecords = new Map<string, ToolRecord>();
 
-  function wrapWithStats(name: string, description: string, fn: (args: Record<string, unknown>) => unknown | Promise<unknown>): (args: Record<string, unknown>) => Promise<unknown> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function wrapWithStats(name: string, description: string, fn: (...args: any[]) => unknown | Promise<unknown>): (...args: any[]) => Promise<unknown> {
     const record: ToolRecord = {
       name,
       description,
@@ -259,15 +260,15 @@ export function createToolGateway(workspaceManager: WorkspaceManager) {
       successCount: 0,
       avgDurationMs: 0,
       lastCalledAt: null,
-      handler: fn,
+      handler: fn as (args: Record<string, unknown>) => unknown | Promise<unknown>,
     };
     toolRecords.set(name, record);
 
-    return async (args: Record<string, unknown>) => {
+    return async (...args: unknown[]) => {
       if (!record.enabled) return { error: `工具 ${name} 已被禁用` };
       const start = Date.now();
       try {
-        const result = await fn(args);
+        const result = await fn(...args);
         record.callCount++;
         record.successCount++;
         const duration = Date.now() - start;
@@ -300,7 +301,8 @@ export function createToolGateway(workspaceManager: WorkspaceManager) {
   function registryTestTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     const record = toolRecords.get(name);
     if (!record) return Promise.reject(new Error(`工具 ${name} 不存在`));
-    return Promise.resolve(record.handler(args));
+    if (!record.enabled) return Promise.resolve({ error: `工具 ${name} 已被禁用` });
+    return mcpServer.callTool(name, args);
   }
 
   return {
@@ -314,7 +316,7 @@ export function createToolGateway(workspaceManager: WorkspaceManager) {
       } catch {
         return null;
       }
-    }) as (path: string) => Promise<WorkspaceFile | null>,
+    }),
     writeFile: wrapWithStats('write_file', '写入工作区中的文件内容', (path: string, content: string) => {
       return workspaceManager.updateFile(path, content);
     }),

@@ -80,7 +80,7 @@ export function createContextBuilder(toolGateway: {
 
   return {
     async buildForPrompt(prompt: string, selectedFile: string | null = null): Promise<WorkspaceSummary> {
-      const files = toolGateway.listWorkspace();
+      const files = await toolGateway.listWorkspace();
       const selectedFileContent = selectedFile ? await toolGateway.readFile(selectedFile) : null;
 
       const promptTokens = tokenize(prompt);
