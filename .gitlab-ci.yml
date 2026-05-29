@@ -1,15 +1,17 @@
-# step2_2 Agent 评估 — 单机 Windows Shell Runner（#590）：仅 eval 两 job，与曾成功流水线一致。
-# aicoding_ts 校验/构建与 deploy 已移出本文件；需要时在本地或另配 Docker Runner 执行 npm run lint / build。
+# step2_2 Agent 评估 — 单机 Windows Shell Runner（#590）：仅 eval 两 job。
+# aicoding_ts 校验与构建使用独立 Shell Runner。
 
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
         - step2_2/**/*
+        - aicoding_ts/**/*
         - .gitlab-ci.yml
     - if: $CI_COMMIT_BRANCH
       changes:
         - step2_2/**/*
+        - aicoding_ts/**/*
         - .gitlab-ci.yml
     - when: never
 
@@ -17,53 +19,14 @@ stages:
   - build
 
 variables:
-  PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  PYTHONUNBUFFERED: "1"
-  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-  NPM_CONFIG_CACHE: "$CI_PROJECT_DIR/.npm"
   NPM_CONFIG_REGISTRY: "https://registry.npmmirror.com"
-  PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
-  PIP_TRUSTED_HOST: "pypi.tuna.tsinghua.edu.cn"
 
-default:
-  interruptible: true
+aicoding_ts:build:
+  stage: build
   tags:
-    - linux
-
-eval:frontend:
-  stage: build
-  image: docker.m.daocloud.io/library/node:20-bookworm-slim
-  cache:
-    key:
-      files:
-        - step2_2/frontend/package-lock.json
-    paths:
-      - .npm/
+    - aicoding_ts
+  interruptible: true
   script:
-    - cd step2_2/frontend
+    - cd aicoding_ts
     - npm ci
-    - npm run build
-
-eval:backend:
-  stage: build
-  image: docker.m.daocloud.io/library/python:3.12-bookworm
-  cache:
-    key:
-      files:
-        - step2_2/backend/requirements.txt
-    paths:
-      - .cache/pip/
-  script:
-    - |
-      set -eu
-      cd step2_2/backend
-      if command -v python >/dev/null 2>&1; then python -m venv .venv-ci
-      elif command -v python3 >/dev/null 2>&1; then python3 -m venv .venv-ci
-      elif command -v py >/dev/null 2>&1; then py -3 -m venv .venv-ci
-      else echo "python not found (python / python3 / py)" >&2; exit 1; fi
-      if [ -x .venv-ci/bin/python ]; then PY=.venv-ci/bin/python
-      elif [ -x .venv-ci/Scripts/python.exe ]; then PY=.venv-ci/Scripts/python.exe
-      else echo "venv python not found" >&2; exit 1; fi
-      "$PY" -m pip install -U pip wheel
-      "$PY" -m pip install -r requirements.txt
-      "$PY" -m compileall -q app
+    - npm run build:web
