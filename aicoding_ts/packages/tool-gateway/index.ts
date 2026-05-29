@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { TreeNode, WorkspaceFile } from '../workspace-manager/index.ts';
+import type { ToolInfo } from '../shared/types.ts';
 import { createMcpServer, type McpServer } from '../mcp-server/index.ts';
 
 type WorkspaceManager = {
@@ -234,10 +235,78 @@ export function createToolGateway(workspaceManager: WorkspaceManager) {
     prompts: buildPromptDefinitions(),
   });
 
+  type ToolRecord = {
+    name: string;
+    description: string;
+    source: 'local' | 'external';
+    enabled: boolean;
+    callCount: number;
+    successCount: number;
+    avgDurationMs: number;
+    lastCalledAt: string | null;
+    handler: (args: Record<string, unknown>) => unknown | Promise<unknown>;
+  };
+
+  const toolRecords = new Map<string, ToolRecord>();
+
+  function wrapWithStats(name: string, description: string, fn: (args: Record<string, unknown>) => unknown | Promise<unknown>): (args: Record<string, unknown>) => Promise<unknown> {
+    const record: ToolRecord = {
+      name,
+      description,
+      source: 'local',
+      enabled: true,
+      callCount: 0,
+      successCount: 0,
+      avgDurationMs: 0,
+      lastCalledAt: null,
+      handler: fn,
+    };
+    toolRecords.set(name, record);
+
+    return async (args: Record<string, unknown>) => {
+      if (!record.enabled) return { error: `工具 ${name} 已被禁用` };
+      const start = Date.now();
+      try {
+        const result = await fn(args);
+        record.callCount++;
+        record.successCount++;
+        const duration = Date.now() - start;
+        record.avgDurationMs = record.avgDurationMs === 0 ? duration : Math.round(record.avgDurationMs * 0.9 + duration * 0.1);
+        record.lastCalledAt = new Date().toISOString();
+        return result;
+      } catch (err) {
+        record.callCount++;
+        const duration = Date.now() - start;
+        record.avgDurationMs = record.avgDurationMs === 0 ? duration : Math.round(record.avgDurationMs * 0.9 + duration * 0.1);
+        record.lastCalledAt = new Date().toISOString();
+        throw err;
+      }
+    };
+  }
+
+  function registryGetAllToolInfos(): ToolInfo[] {
+    return [...toolRecords.values()].map(({ name, description, source, enabled, callCount, successCount, avgDurationMs, lastCalledAt }) => ({
+      name, description, source, enabled, callCount, successCount, avgDurationMs, lastCalledAt,
+    }));
+  }
+
+  function registrySetToolEnabled(name: string, enabled: boolean): boolean {
+    const record = toolRecords.get(name);
+    if (!record) return false;
+    record.enabled = enabled;
+    return true;
+  }
+
+  function registryTestTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+    const record = toolRecords.get(name);
+    if (!record) return Promise.reject(new Error(`工具 ${name} 不存在`));
+    return Promise.resolve(record.handler(args));
+  }
+
   return {
-    async readFile(path: string): Promise<WorkspaceFile | null> {
+    readFile: wrapWithStats('read_file', '读取工作区中的文件内容', async (path: string) => {
       const rootDir = workspaceManager.getRootDir();
-      const absPath = resolve(join(rootDir, path));
+      const absPath = resolve(join(rootDir, String(path)));
       if (!absPath.startsWith(resolve(rootDir))) return null;
       try {
         const content = await readFile(absPath, 'utf8');
@@ -245,29 +314,29 @@ export function createToolGateway(workspaceManager: WorkspaceManager) {
       } catch {
         return null;
       }
-    },
-    async writeFile(path: string, content: string) {
+    }) as (path: string) => Promise<WorkspaceFile | null>,
+    writeFile: wrapWithStats('write_file', '写入工作区中的文件内容', (path: string, content: string) => {
       return workspaceManager.updateFile(path, content);
-    },
-    listWorkspace(): WorkspaceFile[] {
+    }),
+    listWorkspace: wrapWithStats('list_workspace', '列出当前工作区文件树', () => {
       return workspaceManager.listFiles();
-    },
-    searchInWorkspace(query: string, path?: string) {
+    }),
+    searchInWorkspace: wrapWithStats('search_in_workspace', '在工作区中搜索文本或代码片段', (query: string, path?: string) => {
       return workspaceManager.searchInWorkspace(query, path);
-    },
-    patchFile(path: string, patch: string) {
+    }),
+    patchFile: wrapWithStats('patch_file', '根据局部补丁修改工作区中的文件', (path: string, patch: string) => {
       return workspaceManager.patchFile(path, patch);
-    },
-    listVersions() {
+    }),
+    listVersions: wrapWithStats('list_versions', '列出当前工作区的版本快照', () => {
       return workspaceManager.listVersions();
-    },
-    createSnapshot(name?: string, description?: string) {
+    }),
+    createSnapshot: wrapWithStats('create_snapshot', '为当前工作区创建一个可回滚的版本快照', (name?: string, description?: string) => {
       return workspaceManager.createSnapshot(name, description);
-    },
-    restoreSnapshot(snapshotId: string) {
+    }),
+    restoreSnapshot: wrapWithStats('restore_snapshot', '从指定版本快照恢复当前工作区', (snapshotId: string) => {
       return workspaceManager.restoreSnapshot(snapshotId);
-    },
-    async runCommand(command: string) {
+    }),
+    runCommand: wrapWithStats('run_command', '在工作区目录中执行命令', (command: string) => {
       return new Promise((resolve) => {
         const [cmd, ...args] = splitCommand(command);
         execFile(cmd, args, { cwd: workspaceManager.getRootDir() }, (error: unknown, stdout: string, stderr: string) => {
@@ -280,6 +349,11 @@ export function createToolGateway(workspaceManager: WorkspaceManager) {
           });
         });
       });
+    }),
+    registry: {
+      getAllToolInfos: registryGetAllToolInfos,
+      setToolEnabled: registrySetToolEnabled,
+      testTool: registryTestTool,
     },
     mcp: mcpServer,
   };

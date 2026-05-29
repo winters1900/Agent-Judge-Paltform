@@ -1,7 +1,7 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DEFAULT_PROJECT_ID } from '../shared/index.ts';
-import type { Session, TaskSummary, ChatMessage } from '../shared/types.ts';
+import type { Session, SessionMeta, TaskSummary, ChatMessage } from '../shared/types.ts';
 
 export type { Session, TaskSummary, ChatMessage };
 
@@ -77,7 +77,15 @@ export function createSessionStore(options: { projectId?: string } = {}) {
   async function appendMessages(sessionId: string, newMessages: ChatMessage[]): Promise<Session> {
     const session = await loadSession(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
-    return saveSession({ ...session, messages: [...session.messages, ...newMessages] });
+    const updated: Session = { ...session, messages: [...session.messages, ...newMessages] };
+    if (!updated.title) {
+      const firstUser = updated.messages.find((m) => m.role === 'user');
+      if (firstUser && typeof firstUser.content === 'string') {
+        const text = firstUser.content.trim();
+        updated.title = text.length > 30 ? text.slice(0, 30) + '...' : text;
+      }
+    }
+    return saveSession(updated);
   }
 
   async function appendTaskSummary(sessionId: string, summary: TaskSummary): Promise<Session> {
@@ -121,6 +129,9 @@ export function createSessionStore(options: { projectId?: string } = {}) {
               sessionId: s.sessionId,
               createdAt: s.createdAt,
               updatedAt: s.updatedAt,
+              title: s.title ?? '',
+              archived: s.archived ?? false,
+              messageCount: s.messages.length,
               taskCount: s.taskSummaries.length,
               lastMessage: lastMsg.slice(0, 60),
             };
@@ -141,6 +152,51 @@ export function createSessionStore(options: { projectId?: string } = {}) {
     return session;
   }
 
+  async function deleteSession(sessionId: string): Promise<boolean> {
+    try {
+      await unlink(sessionPath(sessionId));
+      const currentId = await getCurrentSessionId();
+      if (currentId === sessionId) {
+        await writeFile(currentFile, JSON.stringify({ currentSessionId: null }, null, 2), 'utf8');
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function updateSessionMeta(sessionId: string, meta: SessionMeta): Promise<Session> {
+    const session = await loadSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    if (meta.title !== undefined) session.title = meta.title;
+    if (meta.archived !== undefined) session.archived = meta.archived;
+    return saveSession(session);
+  }
+
+  async function searchSessions(query: string): Promise<Array<{
+    sessionId: string;
+    createdAt: string;
+    updatedAt: string;
+    title: string;
+    archived: boolean;
+    messageCount: number;
+    taskCount: number;
+    lastMessage: string;
+  }>> {
+    const sessions = await listSessions();
+    if (!query.trim()) return sessions;
+    const lower = query.toLowerCase();
+    return sessions.filter(
+      (s) => s.title.toLowerCase().includes(lower) || s.lastMessage.toLowerCase().includes(lower),
+    ).slice(0, 20);
+  }
+
+  async function exportSession(sessionId: string): Promise<Session> {
+    const session = await loadSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    return session;
+  }
+
   return {
     sessionsDir,
     getCurrentSessionId,
@@ -154,5 +210,9 @@ export function createSessionStore(options: { projectId?: string } = {}) {
     readProjectMemory,
     listSessions,
     switchSession,
+    deleteSession,
+    updateSessionMeta,
+    searchSessions,
+    exportSession,
   };
 }

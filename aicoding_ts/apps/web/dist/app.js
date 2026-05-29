@@ -1745,6 +1745,98 @@ function hideSessionDropdown() {
     sessionDropdown.classList.remove('visible');
     sessionDropdown.setAttribute('aria-hidden', 'true');
 }
+async function deleteSession(sessionId) {
+    const confirmed = await showConfirmDialog({
+        title: '删除会话',
+        message: '确定要删除这个会话吗？此操作无法撤销。',
+        confirmLabel: '删除',
+        danger: true,
+    });
+    if (!confirmed)
+        return;
+    const res = await fetch(`/api/session/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+    if (!res.ok) {
+        showToast({ kind: 'error', title: '删除失败', message: '无法删除会话' });
+        return;
+    }
+    if (currentSessionId === sessionId) {
+        await createNewSession();
+    }
+    await refreshSessionList();
+    showToast({ kind: 'info', title: '已删除', message: `会话已删除` });
+}
+async function renameSession(sessionId) {
+    const newTitle = await new Promise((resolve) => {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = '输入新标题…';
+        input.style.cssText = 'width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel);color:var(--text)';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = '确认';
+        btn.style.cssText = 'margin-top:4px;padding:4px 12px;border-radius:6px;border:1px solid var(--accent-2);background:var(--accent-2);color:#fff;cursor:pointer';
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'padding:8px';
+        wrapper.appendChild(input);
+        wrapper.appendChild(btn);
+        let dialog = document.querySelector('#renameDialog');
+        if (!dialog) {
+            dialog = document.createElement('div');
+            dialog.id = 'renameDialog';
+            dialog.className = 'tree-dialog-overlay';
+            dialog.innerHTML = '<div class="tree-dialog" data-role="container"><h3>重命名会话</h3></div>';
+            document.body.appendChild(dialog);
+        }
+        dialog.querySelector('[data-role="container"]').appendChild(wrapper);
+        dialog.classList.add('visible');
+        input.focus();
+        const cleanup = () => { dialog.classList.remove('visible'); wrapper.remove(); };
+        btn.onclick = () => { cleanup(); resolve(input.value.trim() || null); };
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') {
+            cleanup();
+            resolve(input.value.trim() || null);
+        } if (e.key === 'Escape') {
+            cleanup();
+            resolve(null);
+        } });
+    });
+    if (!newTitle)
+        return;
+    const res = await fetch(`/api/session/${encodeURIComponent(sessionId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle }),
+    });
+    if (!res.ok) {
+        showToast({ kind: 'error', title: '重命名失败', message: '无法更新会话标题' });
+        return;
+    }
+    await refreshSessionList();
+}
+async function archiveSession(sessionId, archive) {
+    const res = await fetch(`/api/session/${encodeURIComponent(sessionId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ archived: archive }),
+    });
+    if (!res.ok) {
+        showToast({ kind: 'error', title: '操作失败', message: '无法更新会话状态' });
+        return;
+    }
+    await refreshSessionList();
+    showToast({ kind: 'info', title: archive ? '已归档' : '已取消归档', message: `会话已${archive ? '归档' : '取消归档'}` });
+}
+function exportSession(sessionId) {
+    const a = document.createElement('a');
+    a.href = `/api/session/${encodeURIComponent(sessionId)}/export`;
+    a.download = `${sessionId}.json`;
+    a.click();
+}
+async function refreshSessionList() {
+    if (!sessionDropdown.classList.contains('visible'))
+        return;
+    await renderSessionDropdown();
+}
 async function renderSessionDropdown() {
     try {
         const response = await fetch('/api/sessions');
@@ -1762,12 +1854,43 @@ async function renderSessionDropdown() {
         }
         else {
             sessions.forEach((session) => {
-                const button = document.createElement('button');
-                button.type = 'button';
+                const item = document.createElement('div');
+                item.className = `session-item${currentSessionId === session.sessionId ? ' active' : ''}`;
                 const shortId = session.sessionId.replace('session-', '').slice(-6);
-                const updatedAt = new Date(session.updatedAt).toLocaleString();
-                button.textContent = `#${shortId} ${session.lastMessage || updatedAt}`;
-                button.addEventListener('click', async () => {
+                const updatedAt = new Date(session.updatedAt).toLocaleString('zh-CN', { hour12: false });
+                const title = session.title || '未命名会话';
+                const msgCount = session.messageCount ?? 0;
+                const taskCount = session.taskCount ?? 0;
+                const archived = session.archived ?? false;
+                item.innerHTML = `
+          <div class="session-item-header">
+            <span class="session-item-id">#${shortId}${archived ? ' 📦' : ''}</span>
+            <span class="session-item-time">${updatedAt}</span>
+          </div>
+          <div class="session-item-preview">${title}</div>
+          <div class="session-item-meta">${msgCount} 条消息 · ${taskCount} 个任务</div>
+          <div class="session-item-actions">
+          </div>
+        `;
+                const actionsEl = item.querySelector('.session-item-actions');
+                const renameBtn = document.createElement('button');
+                renameBtn.textContent = '重命名';
+                renameBtn.addEventListener('click', (e) => { e.stopPropagation(); renameSession(session.sessionId); });
+                actionsEl.appendChild(renameBtn);
+                const archiveBtn = document.createElement('button');
+                archiveBtn.textContent = archived ? '取消归档' : '归档';
+                archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); archiveSession(session.sessionId, !archived); });
+                actionsEl.appendChild(archiveBtn);
+                const exportBtn = document.createElement('button');
+                exportBtn.textContent = '导出';
+                exportBtn.addEventListener('click', (e) => { e.stopPropagation(); exportSession(session.sessionId); });
+                actionsEl.appendChild(exportBtn);
+                const deleteBtn = document.createElement('button');
+                deleteBtn.textContent = '删除';
+                deleteBtn.classList.add('danger');
+                deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteSession(session.sessionId); });
+                actionsEl.appendChild(deleteBtn);
+                item.addEventListener('click', async () => {
                     try {
                         const switchResponse = await fetch('/api/session/switch', {
                             method: 'POST',
@@ -1795,7 +1918,7 @@ async function renderSessionDropdown() {
                         });
                     }
                 });
-                sessionDropdown.appendChild(button);
+                sessionDropdown.appendChild(item);
             });
         }
         sessionDropdown.classList.add('visible');
@@ -1904,12 +2027,79 @@ document.addEventListener('click', () => {
     hideSuggestList();
     hideSessionDropdown();
 });
+// ── 工具管理 ──
+const toolManagement = document.querySelector('#toolManagement');
+const toolList = document.querySelector('#toolList');
+const toolStatus = document.querySelector('#toolStatus');
+const refreshToolsBtnEl = document.querySelector('#refreshToolsBtn');
+let toolCache = [];
+async function loadTools() {
+    try {
+        const res = await fetch('/api/tools');
+        const data = await res.json();
+        toolCache = data.tools ?? [];
+        toolStatus.textContent = `${toolCache.length} 个工具`;
+        renderToolCards();
+    }
+    catch {
+        toolStatus.textContent = '加载失败';
+        toolList.innerHTML = '<div class="version-empty">工具列表加载失败</div>';
+    }
+}
+function renderToolCards() {
+    toolList.innerHTML = '';
+    if (toolCache.length === 0) {
+        toolList.innerHTML = '<div class="version-empty">暂无工具</div>';
+        return;
+    }
+    toolCache.forEach((tool) => {
+        const card = document.createElement('div');
+        card.className = 'tool-item';
+        const successRate = tool.callCount > 0 ? Math.round((tool.successCount / tool.callCount) * 100) : 0;
+        card.innerHTML = `
+      <div class="tool-item-header">
+        <span class="tool-item-name">${tool.name}</span>
+        <span class="tool-item-source ${tool.source}">${tool.source === 'local' ? '内置' : '外部'}</span>
+      </div>
+      <div class="tool-item-desc">${tool.description}</div>
+      <div class="tool-item-stats">
+        <span>调用 ${tool.callCount} 次</span>
+        <span>成功率 ${successRate}%</span>
+        <span>平均 ${tool.avgDurationMs}ms</span>
+      </div>
+      <div class="tool-toggle" data-tool="${tool.name}">
+        <span>${tool.enabled ? '已启用' : '已禁用'}</span>
+        <div class="tool-toggle-switch${tool.enabled ? ' on' : ''}"></div>
+      </div>
+    `;
+        const toggle = card.querySelector('.tool-toggle');
+        toggle.addEventListener('click', () => toggleToolEnabled(tool.name, !tool.enabled));
+        toolList.appendChild(card);
+    });
+}
+async function toggleToolEnabled(toolName, enabled) {
+    const res = await fetch(`/api/tools/${encodeURIComponent(toolName)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) {
+        showToast({ kind: 'error', title: '操作失败', message: '无法更新工具状态' });
+        return;
+    }
+    const tool = toolCache.find((t) => t.name === toolName);
+    if (tool)
+        tool.enabled = enabled;
+    renderToolCards();
+}
+refreshToolsBtnEl.addEventListener('click', loadTools);
 loadLayoutState();
 applyLayoutWidths();
 initResizers();
 loadExpandedFolders();
 loadWorkspace();
 loadVersions();
+loadTools();
 // 添加模板生成按钮到新建菜单
 const newItemMenuElement = newItemMenu;
 if (newItemMenuElement) {

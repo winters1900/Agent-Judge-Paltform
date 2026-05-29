@@ -53,9 +53,27 @@ export type Session = {
   sessionId: string;
   createdAt: string;
   updatedAt: string;
+  title?: string;
+  archived?: boolean;
   messages: ChatMessage[];
   taskSummaries: TaskSummary[];
   activeTaskId: string | null;
+};
+
+export type SessionMeta = {
+  title?: string;
+  archived?: boolean;
+};
+
+export type ToolInfo = {
+  name: string;
+  description: string;
+  source: 'local' | 'external';
+  enabled: boolean;
+  callCount: number;
+  successCount: number;
+  avgDurationMs: number;
+  lastCalledAt: string | null;
 };
 
 // ── SSE 事件类型（向后兼容原有 chunk/tool/result/error，新增以下类型）──

@@ -280,6 +280,51 @@ export function startRuntimeServer() {
       return;
     }
 
+    // ── DELETE /api/session/:id ──
+    if (url.pathname.startsWith('/api/session/') && !url.pathname.includes('/export') && req.method === 'DELETE') {
+      const sessionId = decodeURIComponent(url.pathname.replace('/api/session/', ''));
+      const ok = await sessionStore.deleteSession(sessionId);
+      sendJson(res, ok ? 200 : 404, ok ? { ok: true, sessionId } : { error: 'Session not found' });
+      return;
+    }
+
+    // ── PATCH /api/session/:id ──
+    if (url.pathname.startsWith('/api/session/') && !url.pathname.includes('/export') && req.method === 'PATCH') {
+      const sessionId = decodeURIComponent(url.pathname.replace('/api/session/', ''));
+      const meta = await parseBody<{ title?: string; archived?: boolean }>(req);
+      try {
+        const updated = await sessionStore.updateSessionMeta(sessionId, meta);
+        sendJson(res, 200, updated);
+      } catch (err) {
+        sendJson(res, 404, { error: err instanceof Error ? err.message : String(err) });
+      }
+      return;
+    }
+
+    // ── GET /api/session/:id/export ──
+    if (url.pathname.startsWith('/api/session/') && url.pathname.endsWith('/export') && req.method === 'GET') {
+      const sessionId = decodeURIComponent(url.pathname.replace('/api/session/', '').replace('/export', ''));
+      try {
+        const session = await sessionStore.exportSession(sessionId);
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${sessionId}.json"`,
+        });
+        res.end(JSON.stringify(session, null, 2));
+      } catch (err) {
+        sendJson(res, 404, { error: err instanceof Error ? err.message : String(err) });
+      }
+      return;
+    }
+
+    // ── GET /api/sessions/search ──
+    if (url.pathname === '/api/sessions/search' && req.method === 'GET') {
+      const query = url.searchParams.get('q') ?? '';
+      const results = await sessionStore.searchSessions(query);
+      sendJson(res, 200, { sessions: results });
+      return;
+    }
+
     // ── POST /api/workspace/load（切换工作区目录）──
     if (url.pathname === '/api/workspace/load' && req.method === 'POST') {
       const { path: dirPath } = await parseBody<{ path?: string }>(req);
@@ -392,6 +437,35 @@ export function startRuntimeServer() {
         sendJson(res, result.success ? 200 : 400, result);
         return;
       }
+
+    // ── GET /api/tools ──
+    if (url.pathname === '/api/tools' && req.method === 'GET') {
+      sendJson(res, 200, { tools: toolGateway.registry.getAllToolInfos() });
+      return;
+    }
+
+    // ── POST /api/tools/:name/test ──
+    if (url.pathname.startsWith('/api/tools/') && url.pathname.endsWith('/test') && req.method === 'POST') {
+      const toolName = decodeURIComponent(url.pathname.replace('/api/tools/', '').replace('/test', ''));
+      const args = await parseBody<Record<string, unknown>>(req);
+      try {
+        const result = await toolGateway.registry.testTool(toolName, args);
+        sendJson(res, 200, { tool: toolName, result });
+      } catch (err) {
+        sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+      }
+      return;
+    }
+
+    // ── PATCH /api/tools/:name ──
+    if (url.pathname.startsWith('/api/tools/') && req.method === 'PATCH') {
+      const toolName = decodeURIComponent(url.pathname.replace('/api/tools/', ''));
+      const { enabled } = await parseBody<{ enabled?: boolean }>(req);
+      if (typeof enabled !== 'boolean') { sendJson(res, 400, { error: 'enabled field required' }); return; }
+      const ok = toolGateway.registry.setToolEnabled(toolName, enabled);
+      sendJson(res, ok ? 200 : 404, ok ? { ok: true, name: toolName, enabled } : { error: 'Tool not found' });
+      return;
+    }
 
     // ── GET /api/file/:path ──
     if (url.pathname.startsWith('/api/file/') && req.method === 'GET') {
