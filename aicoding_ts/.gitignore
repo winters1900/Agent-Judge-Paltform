@@ -2,6 +2,10 @@ workspaces/
 .env
 
 node_modules/
+.npm-cache/
+runtime*.log
+runtime.log
+runtime.err.log
 
 # personal files
 .DS_Store

@@ -8,12 +8,10 @@ import type {
   UserMessage,
 } from "../shared/types.ts";
 import type { LlmClient } from "../llm-client/index.ts";
-import { createPlanner } from "./planner.ts";
 import { createExecutor } from "./executor.ts";
 import type { ConfirmHook } from "./executor.ts";
-import { createReviewer } from "./reviewer.ts";
+import { createOrchestrator } from "./orchestrator.ts";
 import { createSummarizer } from "./summarizer.ts";
-import { createMcpClient } from "./mcp-client.ts";
 import { createExternalMcpRegistry } from "../mcp-client/index.ts";
 import { createTemplateGenerator } from "../template-generator/index.ts";
 import type { TemplateParams } from "../template-generator/types.ts";
@@ -103,7 +101,7 @@ export function createAgentCore(
   externalMcpRegistry?: ReturnType<typeof createExternalMcpRegistry>,
 ) {
   const executor = createExecutor(toolGateway, externalMcpRegistry);
-  const reviewer = createReviewer();
+  const orchestrator = createOrchestrator(toolGateway, executor, llmClient);
   const summarizer = createSummarizer();
   const templateGenerator = createTemplateGenerator();
 
@@ -141,21 +139,20 @@ export function createAgentCore(
 
     onEvent({ type: 'task_status', taskId, status: 'executing' });
 
-    const loopResult = await executor.runReActLoop(llmClient, llmMessages, onEvent, onConfirm);
+    const loopResult = await orchestrator.run(taskId, userPrompt, llmMessages, onEvent, onConfirm);
 
     await sessionStore.appendMessages(sessionId, loopResult.messages);
 
     onEvent({ type: 'task_status', taskId, status: 'summarizing' });
-
-    const toolResults = loopResult.messages
-      .filter((m) => m.role === 'tool')
-      .map((m) => ({ name: (m as { name: string }).name, result: { ok: true } }));
-
-    const review = reviewer.review({ content: loopResult.finalContent, toolResults });
+    const reviewNotes = [
+      `Review passed: ${loopResult.review.passed}`,
+      ...loopResult.review.issues.map((issue) => `${issue.severity}: ${issue.file} ${issue.description}`),
+      ...loopResult.review.suggestions,
+    ];
     const summaryText = summarizer.summarize({
       plan: { goal: userPrompt, selectedFile },
       execution: { content: loopResult.finalContent },
-      review,
+      review: { summary: loopResult.finalContent, notes: reviewNotes },
     });
 
     const taskSummary: TaskSummary = {
@@ -167,6 +164,7 @@ export function createAgentCore(
       summary: summaryText,
       toolsUsed: loopResult.toolsUsed,
       filesModified: loopResult.filesModified,
+      trace: loopResult.trace,
     };
 
     await sessionStore.appendTaskSummary(sessionId, taskSummary);

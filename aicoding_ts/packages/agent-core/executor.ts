@@ -1,8 +1,9 @@
 import type { LlmClient } from '../llm-client/index.ts';
-import type { ChatMessage, AssistantMessage, ToolResultMessage, ToolCall, AgentEvent } from '../shared/types.ts';
+import type { ChatMessage, AssistantMessage, ToolResultMessage, ToolCall, AgentEvent, FileDiff } from '../shared/types.ts';
 import type { ExternalMcpTool } from '../mcp-client/index.ts';
+import { captureFileDiff } from './file-diff.ts';
 
-type ToolGateway = {
+export type ToolGateway = {
   readFile: (path: string) => Promise<unknown> | unknown;
   writeFile: (path: string, content: string) => unknown;
   runCommand: (command: string) => unknown;
@@ -28,9 +29,16 @@ export type LoopResult = {
   finalContent: string;
   toolsUsed: string[];
   filesModified: string[];
+  fileChanges: FileDiff[];
 };
 
 const MAX_ITERATIONS = 20;
+
+export type ReActLoopOptions = {
+  maxIterations?: number;
+};
+
+export type Executor = ReturnType<typeof createExecutor>;
 
 const LOCAL_TOOL_DEFINITIONS = [
   {
@@ -234,14 +242,17 @@ export function createExecutor(toolGateway: ToolGateway, externalMcpRegistry?: E
       messages: ChatMessage[],
       onEvent: (event: AgentEvent) => void,
       onConfirm?: ConfirmHook,
+      options: ReActLoopOptions = {},
     ): Promise<LoopResult> {
       const workingMessages: ChatMessage[] = [...messages];
       const loopMessages: ChatMessage[] = [];
       const toolsUsed: string[] = [];
       const filesModified: string[] = [];
+      const fileChanges: FileDiff[] = [];
       let finalContent = '';
+      const maxIterations = options.maxIterations ?? MAX_ITERATIONS;
 
-      for (let i = 0; i < MAX_ITERATIONS; i++) {
+      for (let i = 0; i < maxIterations; i++) {
         const toolDefinitions = await buildToolDefinitions();
         const result = await llmClient.createMessage(workingMessages, {
           tools: toolDefinitions,
@@ -296,7 +307,17 @@ export function createExecutor(toolGateway: ToolGateway, externalMcpRegistry?: E
             const fn = toolFns[toolName];
             if (fn) {
               try {
-                toolResult = await fn(args);
+                if ((toolName === 'write_file' || toolName === 'patch_file') && typeof args.path === 'string') {
+                  const captured = await captureFileDiff(
+                    toolGateway.readFile,
+                    args.path,
+                    () => fn(args),
+                  );
+                  toolResult = captured.result;
+                  fileChanges.push(captured.diff);
+                } else {
+                  toolResult = await fn(args);
+                }
               } catch (err) {
                 toolResult = { error: String(err) };
               }
@@ -335,7 +356,7 @@ export function createExecutor(toolGateway: ToolGateway, externalMcpRegistry?: E
         }
       }
 
-      return { messages: loopMessages, finalContent, toolsUsed, filesModified };
+      return { messages: loopMessages, finalContent, toolsUsed, filesModified, fileChanges };
     },
   };
 }

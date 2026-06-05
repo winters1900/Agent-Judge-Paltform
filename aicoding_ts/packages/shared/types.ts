@@ -45,6 +45,63 @@ export type TaskSummary = {
   summary: string;
   toolsUsed: string[];
   filesModified: string[];
+  trace?: TaskTrace;
+};
+
+export type TaskType = 'read-heavy' | 'code-only' | 'compound';
+
+export type FileDiff = {
+  path: string;
+  before: string | null;
+  after: string | null;
+};
+
+export type SubTask = {
+  id: string;
+  description: string;
+  dependsOn?: string[];
+  assignedTo: 'code-agent' | 'worker-pool';
+  status: 'pending' | 'running' | 'done' | 'failed';
+  result?: string;
+};
+
+export type AgentMessage = {
+  from: 'orchestrator' | 'worker' | 'code-agent' | 'review-agent';
+  to: 'orchestrator' | 'worker' | 'code-agent' | 'review-agent';
+  taskId: string;
+  subTaskId?: string;
+  payload: {
+    prompt?: string;
+    context?: string;
+    result?: string;
+    fileChanges?: FileDiff[];
+  };
+  timestamp: number;
+};
+
+export type ReviewIssue = {
+  severity: 'error' | 'warning' | 'suggestion';
+  file: string;
+  description: string;
+};
+
+export type ReviewOutput = {
+  passed: boolean;
+  issues: ReviewIssue[];
+  suggestions: string[];
+  retryInstruction?: string;
+};
+
+export type TaskTrace = {
+  taskId: string;
+  classifiedAs: TaskType;
+  workerTaskCount: number;
+  workerParallelDurationMs: number;
+  serialDurationMs: number;
+  codeAgentIterations: number;
+  reviewPassed: boolean;
+  reviewRetries: number;
+  subTaskCount: number;
 };
 
 // ── 会话对象 ──

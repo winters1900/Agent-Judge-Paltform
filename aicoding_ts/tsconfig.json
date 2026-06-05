@@ -16,5 +16,5 @@
     "allowImportingTsExtensions": true
   },
   "include": ["apps/**/*", "packages/**/*", "server.js", "server.ts", "public/**/*"],
-  "exclude": ["node_modules", "workspaces", "dist"]
+  "exclude": ["node_modules", "workspaces", "dist", "**/*.test.ts"]
 }
