@@ -10,7 +10,8 @@ import type {
 import type { LlmClient } from "../llm-client/index.ts";
 import { createPlanner } from "./planner.ts";
 import { createExecutor } from "./executor.ts";
-import type { ConfirmHook } from "./executor.ts";
+import type { ConfirmHook, ExecutorHooks } from "./executor.ts";
+import type { CommandConfirmHook } from "../tool-gateway/run-command.ts";
 import { createReviewer } from "./reviewer.ts";
 import { createSummarizer } from "./summarizer.ts";
 import { createMcpClient } from "./mcp-client.ts";
@@ -74,6 +75,7 @@ function buildSystemPrompt(
     '如果存在外部 MCP 工具，可按工具名直接调用，它们通常以 mcp__服务名__工具名 的形式出现。',
     '当任务完成时，用简洁中文总结执行结果。',
     '如需用户确认某个破坏性操作或存在不确定的决策，调用 ask_user 工具提出问题。',
+    'run_command 对非白名单命令会自动弹出确认；静态检查优先使用 read_lints；查看文件历史变更使用 diff_file。',
     '',
     `## 工作区概况`,
     context.workspaceSummary || '（工作区为空）',
@@ -113,7 +115,7 @@ export function createAgentCore(
     userPrompt: string,
     selectedFile: string | null,
     onEvent: (event: AgentEvent) => void,
-    onConfirm: ConfirmHook,
+    hooks: ConfirmHook | ExecutorHooks,
   ): Promise<TaskSummary> {
     if (!sessionStore) throw new Error('sessionStore is required for runTask');
 
@@ -141,7 +143,7 @@ export function createAgentCore(
 
     onEvent({ type: 'task_status', taskId, status: 'executing' });
 
-    const loopResult = await executor.runReActLoop(llmClient, llmMessages, onEvent, onConfirm);
+    const loopResult = await executor.runReActLoop(llmClient, llmMessages, onEvent, hooks);
 
     await sessionStore.appendMessages(sessionId, loopResult.messages);
 
@@ -264,8 +266,8 @@ export function createAgentCore(
       return toolGateway.writeFile(path, content);
     },
 
-    async runCommand(command: string) {
-      return toolGateway.runCommand(command);
+    async runCommand(command: string, ctx?: { onCommandConfirm?: CommandConfirmHook }) {
+      return toolGateway.runCommand(command, ctx);
     },
   };
 }

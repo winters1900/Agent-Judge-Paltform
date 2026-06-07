@@ -1,6 +1,11 @@
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { DEFAULT_PROJECT_ID, type VersionSnapshot } from '../shared/index.ts';
+import {
+  applyAtLineAnchor,
+  applyFuzzyReplacement,
+  parseLineAnchor,
+} from '../tool-gateway/patch-matcher.ts';
 
 export type WorkspaceSearchHit = {
   path: string;
@@ -376,17 +381,8 @@ export function createWorkspaceManager(options: { projectId?: string; rootDir?: 
     if (!patchText) return { ok: false, action: 'patch_failed', error: 'Patch content is empty' };
 
     const applyReplacement = (source: string, beforeBlock: string, afterBlock: string) => {
-      const exactIndex = source.indexOf(beforeBlock);
-      if (exactIndex >= 0) {
-        return {
-          content: source.slice(0, exactIndex) + afterBlock + source.slice(exactIndex + beforeBlock.length),
-          replaced: true,
-        };
-      }
-
-      const fuzzyPattern = new RegExp(escapeRegExp(beforeBlock).replace(/\s+/g, '[\\s\\S]+?'), 'm');
-      if (!fuzzyPattern.test(source)) return { content: source, replaced: false };
-      return { content: source.replace(fuzzyPattern, afterBlock), replaced: true };
+      const result = applyFuzzyReplacement(source, beforeBlock, afterBlock);
+      return { content: result.content, replaced: result.replaced, hint: result.hint };
     };
 
     const applyLineReplacement = (source: string, searchLine: string, replaceLine: string) => {
@@ -405,8 +401,12 @@ export function createWorkspaceManager(options: { projectId?: string; rootDir?: 
         const beforeBlock = hunk.before.join('\n').trim();
         const afterBlock = hunk.after.join('\n').trim();
         if (!beforeBlock && !afterBlock) continue;
-        const result = applyReplacement(next, beforeBlock, afterBlock);
-        if (!result.replaced) return { content: source, replaced: false };
+        const result = applyReplacement(next, beforeBlock, afterBlock) as {
+          content: string;
+          replaced: boolean;
+          hint?: string;
+        };
+        if (!result.replaced) return { content: source, replaced: false, hint: result.hint };
         next = result.content;
         replacedAny = true;
       }
@@ -416,10 +416,43 @@ export function createWorkspaceManager(options: { projectId?: string; rootDir?: 
     let after = before;
     let replacements = 0;
 
-    if (patchText.includes('@@') && (patchText.includes('+') || patchText.includes('-'))) {
+    const anchor = parseLineAnchor(patchText);
+    if (anchor) {
+      let beforeBlock = '';
+      let afterBlock = '';
+      if (anchor.rest.includes('\n---\n')) {
+        [beforeBlock, afterBlock] = anchor.rest.split(/\n---\n/);
+      } else if (anchor.rest.includes('=>')) {
+        const [left, right] = anchor.rest.split(/\s*=>\s*/);
+        beforeBlock = left ?? '';
+        afterBlock = right ?? '';
+      } else {
+        return {
+          ok: false,
+          action: 'patch_failed',
+          error: '行号锚点格式：@@ line N 后接 "before\\n---\\nafter" 或 "before => after"',
+        };
+      }
+      const anchored = applyAtLineAnchor(after, anchor.line, beforeBlock, afterBlock);
+      if (!anchored.replaced) {
+        return {
+          ok: false,
+          action: 'patch_failed',
+          error: anchored.hint ?? `Patch target not found near line ${anchor.line} in ${normalized}`,
+        };
+      }
+      after = anchored.content;
+      replacements = 1;
+    } else if (patchText.includes('@@') && (patchText.includes('+') || patchText.includes('-'))) {
       const hunks = parseUnifiedDiff(patchText);
-      const result = applyBlockDiff(after, hunks);
-      if (!result.replaced) return { ok: false, action: 'patch_failed', error: `Patch target not found in ${normalized}` };
+      const result = applyBlockDiff(after, hunks) as { content: string; replaced: boolean; hint?: string };
+      if (!result.replaced) {
+        return {
+          ok: false,
+          action: 'patch_failed',
+          error: result.hint ?? `Patch target not found in ${normalized}`,
+        };
+      }
       after = result.content;
       replacements = hunks.length;
     } else {
@@ -450,8 +483,17 @@ export function createWorkspaceManager(options: { projectId?: string; rootDir?: 
         if (!afterBlock.trim()) return { ok: false, action: 'patch_failed', error: 'Patch after block is empty' };
 
         const lineResult = applyLineReplacement(after, beforeBlock, afterBlock);
-        const blockResult = lineResult.replaced ? lineResult : applyReplacement(after, beforeBlock.trim(), afterBlock.trim());
-        if (!blockResult.replaced) return { ok: false, action: 'patch_failed', error: `Patch target not found in ${normalized}` };
+        const blockResult = lineResult.replaced
+          ? lineResult
+          : applyReplacement(after, beforeBlock.trim(), afterBlock.trim());
+        if (!blockResult.replaced) {
+          const hint = 'hint' in blockResult ? (blockResult as { hint?: string }).hint : undefined;
+          return {
+            ok: false,
+            action: 'patch_failed',
+            error: hint ?? `Patch target not found in ${normalized}`,
+          };
+        }
         after = blockResult.content;
         replacements += 1;
       }

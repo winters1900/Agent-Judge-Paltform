@@ -2,8 +2,27 @@
 
 ## [Unreleased]
 
-### 进行中
-（无）
+### Added
+- `packages/tool-gateway/patch-matcher.ts`：补丁 fuzzy 匹配与 `@@ line N` 行号锚点
+- `packages/tool-gateway/tool-call-log.ts`、`tool-fallback.ts`
+- `packages/agent-core/tool-definitions.ts`：带示例的详细工具描述
+- `GET /api/tools/:name/logs`；工具管理 UI：测试对话框、调用日志、diff_file 格式化展示
+
+### Changed
+- `patch_file`：增强容错与失败提示；禁用工具不再暴露给 LLM
+- 工具失败时返回 `fallback` 建议（`enrichToolResult`）
+
+### Added
+- `packages/tool-gateway/command-safety.ts`：命令风险分级、危险模式拦截、白名单匹配
+- `packages/tool-gateway/command-whitelist-store.ts`：项目级 `command-whitelist.json` 持久化与默认规则
+- `packages/tool-gateway/run-command.ts`：安全执行、超时控制、命令确认 Hook
+- `packages/tool-gateway/read-lints.ts`、`diff-file.ts`：新增 `read_lints`、`diff_file` 工具
+- `apps/runtime/server.ts`：`POST /api/agent/command-confirm`；`GET/POST/DELETE /api/command-whitelist`
+- `apps/web`：命令确认弹窗（允许一次 / 加入白名单 / 拒绝）；命令白名单管理面板
+
+### Changed
+- `run_command`：非白名单命令在 Agent 执行前强制用户确认（CC 风格）
+- `packages/agent-core/executor.ts`：注册 `read_lints`、`diff_file`；`run_command` 接入确认流
 
 ---
 

@@ -22,7 +22,13 @@ const failureDetail = document.querySelector('#failureDetail');
 const clearFailureBtn = document.querySelector('#clearFailureBtn');
 const statusTimeline = document.querySelector('#statusTimeline');
 const commandConfirmOverlay = document.querySelector('#commandConfirmOverlay');
-const commandConfirmCloseBtn = document.querySelector('#commandConfirmCloseBtn');
+const commandConfirmReason = document.querySelector('#commandConfirmReason');
+const commandConfirmRisk = document.querySelector('#commandConfirmRisk');
+const commandConfirmCwd = document.querySelector('#commandConfirmCwd');
+const commandConfirmText = document.querySelector('#commandConfirmText');
+const commandConfirmDenyBtn = document.querySelector('#commandConfirmDenyBtn');
+const commandConfirmOnceBtn = document.querySelector('#commandConfirmOnceBtn');
+const commandConfirmWhitelistBtn = document.querySelector('#commandConfirmWhitelistBtn');
 const refreshBtn = document.querySelector('#refreshBtn');
 const workspaceLayout = document.querySelector('#workspaceLayout');
 const newItemBtn = document.querySelector('#newItemBtn');
@@ -34,7 +40,6 @@ const newSessionBtn = document.querySelector('#newSessionBtn');
 const workspacePathInput = document.querySelector('#workspacePathInput');
 const workspaceSuggestList = document.querySelector('#workspaceSuggestList');
 const loadWorkspaceBtn = document.querySelector('#loadWorkspaceBtn');
-;
 let selectedFile = null;
 let currentFileContent = '';
 let workspaceCache = [];
@@ -50,6 +55,7 @@ let lastUserPrompt = null;
 let lastTaskPhase = 'idle';
 let lastTaskPhaseUpdatedAt = 0;
 let lastConfirmRequest = null;
+let lastCommandConfirmRequest = null;
 let showRawSummary = false;
 let lastFailureText = null;
 let statusHistory = [];
@@ -674,10 +680,38 @@ function renderMarkdown(text) {
 const TOOL_COLORS = {
     write_file: 'var(--accent-2)',
     read_file: 'var(--muted)',
+    patch_file: '#a78bfa',
+    search_in_workspace: '#94a3b8',
     run_command: '#f59e0b',
+    read_lints: '#34d399',
+    diff_file: '#38bdf8',
     ask_user: '#facc15',
     list_workspace: 'var(--muted)',
 };
+function formatToolDetailForChat(toolName, rawDetail) {
+    if (toolName !== 'diff_file')
+        return rawDetail;
+    try {
+        const data = JSON.parse(rawDetail);
+        const lines = [
+            `文件：${data.path ?? '?'}`,
+            `对比快照：${data.snapshotName ?? '最新'}`,
+            `变更：+${data.stats?.added ?? 0} / -${data.stats?.removed ?? 0}`,
+            '',
+        ];
+        for (const h of (data.hunks ?? []).slice(0, 80)) {
+            const prefix = h.type === 'add' ? '+' : h.type === 'remove' ? '-' : ' ';
+            const no = h.newLineNo ?? h.oldLineNo ?? '';
+            lines.push(`${prefix} ${String(no).padStart(4)} | ${h.line}`);
+        }
+        if ((data.hunks?.length ?? 0) > 80)
+            lines.push('…（仅显示前 80 行）');
+        return lines.join('\n');
+    }
+    catch {
+        return rawDetail;
+    }
+}
 function appendMessage(role, text) {
     const div = document.createElement('div');
     div.className = `message ${role}`;
@@ -1647,11 +1681,12 @@ async function streamChat(prompt) {
                     updateAssistant(accumulatedChunks);
                 }
                 else if (event.type === 'tool') {
-                    appendToolDetail(event.tool, `${event.summary || '工具调用结果'}\n\n${event.detail || ''}`);
+                    const detailBody = formatToolDetailForChat(event.tool, event.detail || '');
+                    appendToolDetail(event.tool, `${event.summary || '工具调用结果'}\n\n${detailBody}`);
                     if (event.tool === 'run_command') {
                         lastRunCommandDetail = `${event.summary || '命令执行'}\n\n${event.detail || ''}`.trim();
                     }
-                    if (event.tool === 'write_file') {
+                    if (event.tool === 'write_file' || event.tool === 'patch_file') {
                         sawWriteFileSuccess = true;
                         scheduleWorkspaceRefresh(300);
                     }
@@ -1706,6 +1741,12 @@ async function streamChat(prompt) {
                     lastConfirmRequest = { confirmId: event.confirmId, question: event.question, options: event.options };
                     renderWaitingUserPanel();
                     renderConfirmCard(event);
+                }
+                else if (event.type === 'command_confirm_request') {
+                    setAgentStatus('waiting_confirm');
+                    setTaskPhase('waiting_user', '等待命令确认');
+                    hideCommandConfirmOverlay();
+                    showCommandConfirmOverlay(event);
                 }
             }
             catch {
@@ -1991,9 +2032,58 @@ clearFailureBtn.addEventListener('click', () => {
     lastFailureText = null;
     renderFailurePanel();
 });
-commandConfirmCloseBtn.addEventListener('click', () => {
+function hideCommandConfirmOverlay() {
     commandConfirmOverlay.classList.remove('visible');
     commandConfirmOverlay.setAttribute('aria-hidden', 'true');
+    lastCommandConfirmRequest = null;
+}
+function showCommandConfirmOverlay(event) {
+    lastCommandConfirmRequest = event;
+    commandConfirmReason.textContent = event.reason;
+    commandConfirmRisk.textContent = `风险：${event.risk}`;
+    commandConfirmRisk.dataset.risk = event.risk;
+    commandConfirmCwd.textContent = `cwd: ${event.cwd}`;
+    commandConfirmText.textContent = event.command;
+    commandConfirmOverlay.classList.add('visible');
+    commandConfirmOverlay.setAttribute('aria-hidden', 'false');
+}
+async function submitCommandConfirm(decision) {
+    if (!lastCommandConfirmRequest)
+        return;
+    const { confirmId } = lastCommandConfirmRequest;
+    try {
+        const res = await fetch('/api/agent/command-confirm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirmId, decision }),
+        });
+        if (!res.ok)
+            throw new Error('命令确认提交失败');
+        hideCommandConfirmOverlay();
+        if (decision === 'deny') {
+            showToast({ kind: 'info', title: '已拒绝', message: '命令未执行' });
+        }
+        else {
+            setAgentStatus('running');
+            if (decision === 'allow_whitelist')
+                void loadCommandWhitelist();
+            showToast({
+                kind: 'info',
+                title: decision === 'allow_whitelist' ? '已加入白名单' : '已允许',
+                message: '命令正在执行…',
+            });
+        }
+    }
+    catch (error) {
+        showToast({ kind: 'error', title: '确认失败', message: error.message });
+    }
+}
+commandConfirmDenyBtn.addEventListener('click', () => submitCommandConfirm('deny'));
+commandConfirmOnceBtn.addEventListener('click', () => submitCommandConfirm('allow_once'));
+commandConfirmWhitelistBtn.addEventListener('click', () => submitCommandConfirm('allow_whitelist'));
+commandConfirmOverlay.addEventListener('click', (e) => {
+    if (e.target === commandConfirmOverlay)
+        void submitCommandConfirm('deny');
 });
 newSessionBtn.addEventListener('click', createNewSession);
 sessionBadge.addEventListener('click', (e) => {
@@ -2033,6 +2123,85 @@ const toolList = document.querySelector('#toolList');
 const toolStatus = document.querySelector('#toolStatus');
 const refreshToolsBtnEl = document.querySelector('#refreshToolsBtn');
 let toolCache = [];
+const TOOL_TEST_PRESETS = {
+    read_file: '{\n  "path": "package.json"\n}',
+    write_file: '{\n  "path": "test.txt",\n  "content": "hello"\n}',
+    patch_file: '{\n  "path": "test.txt",\n  "patch": "hello\\n---\\nworld"\n}',
+    search_in_workspace: '{\n  "query": "function"\n}',
+    run_command: '{\n  "command": "npm test"\n}',
+    read_lints: '{}',
+    diff_file: '{\n  "path": "package.json"\n}',
+    list_workspace: '{}',
+    list_versions: '{}',
+};
+async function showToolTestDialog(toolName) {
+    const preset = TOOL_TEST_PRESETS[toolName] ?? '{}';
+    const dialog = document.createElement('div');
+    dialog.className = 'tree-dialog-overlay visible';
+    dialog.setAttribute('aria-hidden', 'false');
+    dialog.innerHTML = `
+    <div class="tree-dialog tool-test-dialog">
+      <h3>测试工具：${toolName}</h3>
+      <label class="tool-test-label">参数 JSON</label>
+      <textarea class="tool-test-args" rows="8">${preset}</textarea>
+      <pre class="tool-test-result"></pre>
+      <div class="tree-dialog-actions">
+        <button type="button" data-role="cancel" class="ghost-button">关闭</button>
+        <button type="button" data-role="run" class="confirm-submit-btn">运行</button>
+      </div>
+    </div>
+  `;
+    document.body.appendChild(dialog);
+    const close = () => dialog.remove();
+    dialog.querySelector('[data-role="cancel"]').addEventListener('click', close);
+    dialog.addEventListener('click', (e) => { if (e.target === dialog)
+        close(); });
+    dialog.querySelector('[data-role="run"]').addEventListener('click', async () => {
+        const textarea = dialog.querySelector('.tool-test-args');
+        const resultEl = dialog.querySelector('.tool-test-result');
+        try {
+            const args = JSON.parse(textarea.value);
+            resultEl.textContent = '运行中…';
+            const res = await fetch(`/api/tools/${encodeURIComponent(toolName)}/test`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(args),
+            });
+            const data = await res.json();
+            resultEl.textContent = JSON.stringify(data, null, 2);
+            void loadTools();
+        }
+        catch (err) {
+            resultEl.textContent = `错误：${err.message}`;
+        }
+    });
+}
+async function showToolLogsDialog(toolName) {
+    const res = await fetch(`/api/tools/${encodeURIComponent(toolName)}/logs?limit=20`);
+    const data = await res.json();
+    const logs = data.logs ?? [];
+    const dialog = document.createElement('div');
+    dialog.className = 'tree-dialog-overlay visible';
+    dialog.innerHTML = `
+    <div class="tree-dialog tool-logs-dialog">
+      <h3>${toolName} 调用日志</h3>
+      <div class="tool-logs-list">${logs.length === 0 ? '<p class="version-empty">暂无记录</p>' : logs.map((l) => `
+        <div class="tool-log-entry ${l.ok ? 'ok' : 'fail'}">
+          <div class="tool-log-meta">${l.at} · ${l.durationMs}ms · ${l.ok ? '成功' : '失败'}</div>
+          <div class="tool-log-args">${l.argsPreview}</div>
+          <div class="tool-log-result">${l.resultPreview}</div>
+        </div>
+      `).join('')}</div>
+      <div class="tree-dialog-actions">
+        <button type="button" class="ghost-button">关闭</button>
+      </div>
+    </div>
+  `;
+    document.body.appendChild(dialog);
+    dialog.querySelector('button').addEventListener('click', () => dialog.remove());
+    dialog.addEventListener('click', (e) => { if (e.target === dialog)
+        dialog.remove(); });
+}
 async function loadTools() {
     try {
         const res = await fetch('/api/tools');
@@ -2071,9 +2240,15 @@ function renderToolCards() {
         <span>${tool.enabled ? '已启用' : '已禁用'}</span>
         <div class="tool-toggle-switch${tool.enabled ? ' on' : ''}"></div>
       </div>
+      <div class="tool-item-actions">
+        ${tool.source === 'local' ? `<button type="button" class="ghost-button tool-test-btn" data-tool="${tool.name}">测试</button>` : ''}
+        <button type="button" class="ghost-button tool-logs-btn" data-tool="${tool.name}">日志</button>
+      </div>
     `;
         const toggle = card.querySelector('.tool-toggle');
         toggle.addEventListener('click', () => toggleToolEnabled(tool.name, !tool.enabled));
+        card.querySelector('.tool-test-btn')?.addEventListener('click', () => showToolTestDialog(tool.name));
+        card.querySelector('.tool-logs-btn')?.addEventListener('click', () => showToolLogsDialog(tool.name));
         toolList.appendChild(card);
     });
 }
@@ -2093,6 +2268,80 @@ async function toggleToolEnabled(toolName, enabled) {
     renderToolCards();
 }
 refreshToolsBtnEl.addEventListener('click', loadTools);
+const whitelistList = document.querySelector('#whitelistList');
+const whitelistStatus = document.querySelector('#whitelistStatus');
+const refreshWhitelistBtn = document.querySelector('#refreshWhitelistBtn');
+const whitelistAddForm = document.querySelector('#whitelistAddForm');
+const whitelistPatternInput = document.querySelector('#whitelistPatternInput');
+const whitelistMatchTypeSelect = document.querySelector('#whitelistMatchTypeSelect');
+let whitelistCache = [];
+async function loadCommandWhitelist() {
+    try {
+        const res = await fetch('/api/command-whitelist');
+        const data = await res.json();
+        whitelistCache = data.entries ?? [];
+        whitelistStatus.textContent = `${whitelistCache.length} 条规则`;
+        renderWhitelistEntries();
+    }
+    catch {
+        whitelistStatus.textContent = '加载失败';
+        whitelistList.innerHTML = '<div class="version-empty">白名单加载失败</div>';
+    }
+}
+function renderWhitelistEntries() {
+    whitelistList.innerHTML = '';
+    if (whitelistCache.length === 0) {
+        whitelistList.innerHTML = '<div class="version-empty">暂无白名单，可在命令确认时添加</div>';
+        return;
+    }
+    whitelistCache.forEach((entry) => {
+        const card = document.createElement('div');
+        card.className = 'whitelist-item';
+        const matchLabel = entry.matchType === 'exact' ? '完全匹配' : entry.matchType === 'prefix' ? '前缀' : '命令名';
+        card.innerHTML = `
+      <div class="whitelist-item-header">
+        <code class="whitelist-pattern">${entry.pattern}</code>
+        <span class="whitelist-match-type">${matchLabel}</span>
+      </div>
+      <div class="whitelist-item-meta">${entry.label || entry.id}</div>
+      <button type="button" class="ghost-button whitelist-remove-btn" data-id="${entry.id}">删除</button>
+    `;
+        card.querySelector('.whitelist-remove-btn').addEventListener('click', () => removeWhitelistEntry(entry.id));
+        whitelistList.appendChild(card);
+    });
+}
+async function removeWhitelistEntry(id) {
+    const res = await fetch(`/api/command-whitelist/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!res.ok) {
+        showToast({ kind: 'error', title: '删除失败', message: '无法删除白名单项' });
+        return;
+    }
+    await loadCommandWhitelist();
+    showToast({ kind: 'info', title: '已删除', message: '白名单规则已移除' });
+}
+whitelistAddForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pattern = whitelistPatternInput.value.trim();
+    if (!pattern)
+        return;
+    const res = await fetch('/api/command-whitelist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            pattern,
+            matchType: whitelistMatchTypeSelect.value,
+            label: pattern,
+        }),
+    });
+    if (!res.ok) {
+        showToast({ kind: 'error', title: '添加失败', message: '无法添加白名单' });
+        return;
+    }
+    whitelistPatternInput.value = '';
+    await loadCommandWhitelist();
+    showToast({ kind: 'info', title: '已添加', message: `白名单：${pattern}` });
+});
+refreshWhitelistBtn.addEventListener('click', loadCommandWhitelist);
 loadLayoutState();
 applyLayoutWidths();
 initResizers();
@@ -2100,6 +2349,7 @@ loadExpandedFolders();
 loadWorkspace();
 loadVersions();
 loadTools();
+loadCommandWhitelist();
 // 添加模板生成按钮到新建菜单
 const newItemMenuElement = newItemMenu;
 if (newItemMenuElement) {

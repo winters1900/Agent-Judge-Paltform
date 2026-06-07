@@ -7,7 +7,9 @@ import { createLlmClient } from '../../packages/llm-client/index.ts';
 import { createToolGateway } from '../../packages/tool-gateway/index.ts';
 import { createWorkspaceManager } from '../../packages/workspace-manager/index.ts';
 import { createSessionStore } from '../../packages/session-store/index.ts';
-import type { AgentEvent, PendingConfirm } from '../../packages/shared/types.ts';
+import type { AgentEvent, PendingConfirm, PendingCommandConfirm } from '../../packages/shared/types.ts';
+import { validateCommand } from '../../packages/tool-gateway/command-safety.ts';
+import type { CommandConfirmHook } from '../../packages/tool-gateway/run-command.ts';
 import type { McpJsonRpcRequest } from '../../packages/mcp-server/index.ts';
 import { createExternalMcpRegistry, type ExternalMcpServerConfig } from '../../packages/mcp-client/index.ts';
 
@@ -54,6 +56,17 @@ type ConfirmPayload = {
   answer?: string;
 };
 
+type CommandConfirmPayload = {
+  confirmId?: string;
+  decision?: 'allow_once' | 'allow_whitelist' | 'deny';
+};
+
+type WhitelistPayload = {
+  pattern?: string;
+  matchType?: 'exact' | 'prefix' | 'command';
+  label?: string;
+};
+
 type ToolGateway = ReturnType<typeof createToolGateway>;
 type WorkspaceManager = ReturnType<typeof createWorkspaceManager>;
 type AgentCore = ReturnType<typeof createAgentCore>;
@@ -95,6 +108,51 @@ async function parseBody<T>(req: IncomingMessage): Promise<T> {
 
 // ── 挂起确认表（内存）──
 const pendingConfirms = new Map<string, PendingConfirm>();
+const pendingCommandConfirms = new Map<string, PendingCommandConfirm>();
+
+function createCommandConfirmHook(
+  sessionId: string,
+  taskId: string,
+  onEvent: (event: AgentEvent) => void,
+): CommandConfirmHook {
+  return (request) => {
+    const confirmId = `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    return new Promise<'allow_once' | 'allow_whitelist' | 'deny'>((resolve, reject) => {
+      const pending: PendingCommandConfirm = {
+        confirmId,
+        taskId,
+        sessionId,
+        command: request.command,
+        cwd: request.cwd,
+        risk: request.validation.risk,
+        reason: request.validation.reason,
+        createdAt: Date.now(),
+        resolve,
+        reject,
+      };
+      pendingCommandConfirms.set(confirmId, pending);
+
+      onEvent({ type: 'task_status', taskId, status: 'waiting_confirm', note: '等待命令执行确认' });
+      onEvent({
+        type: 'command_confirm_request',
+        taskId,
+        confirmId,
+        command: request.command,
+        cwd: request.cwd,
+        risk: request.validation.risk,
+        reason: request.validation.reason,
+      });
+
+      setTimeout(() => {
+        if (pendingCommandConfirms.has(confirmId)) {
+          pendingCommandConfirms.delete(confirmId);
+          reject(new Error(`命令确认超时：${confirmId}`));
+        }
+      }, CONFIRM_TIMEOUT_MS);
+    });
+  };
+}
 
 function createConfirmHook(
   sessionId: string,
@@ -496,6 +554,15 @@ export function startRuntimeServer() {
       return;
     }
 
+    // ── GET /api/tools/:name/logs ──
+    if (url.pathname.startsWith('/api/tools/') && url.pathname.endsWith('/logs') && req.method === 'GET') {
+      const toolName = decodeURIComponent(url.pathname.replace('/api/tools/', '').replace('/logs', ''));
+      const limit = Number(url.searchParams.get('limit') || 30);
+      const logs = toolGateway.registry.getToolLogs(toolName, limit);
+      sendJson(res, 200, { tool: toolName, logs });
+      return;
+    }
+
     // ── POST /api/tools/:name/test ──
     if (url.pathname.startsWith('/api/tools/') && url.pathname.endsWith('/test') && req.method === 'POST') {
       const toolName = decodeURIComponent(url.pathname.replace('/api/tools/', '').replace('/test', ''));
@@ -587,10 +654,61 @@ export function startRuntimeServer() {
       return;
     }
 
-    // ── POST /api/tool/run ──
+    // ── GET /api/command-whitelist ──
+    if (url.pathname === '/api/command-whitelist' && req.method === 'GET') {
+      const entries = await toolGateway.commandWhitelist.list();
+      sendJson(res, 200, { entries });
+      return;
+    }
+
+    // ── POST /api/command-whitelist ──
+    if (url.pathname === '/api/command-whitelist' && req.method === 'POST') {
+      const parsed = await parseBody<WhitelistPayload>(req);
+      if (!parsed.pattern?.trim()) {
+        sendJson(res, 400, { error: 'pattern is required' });
+        return;
+      }
+      const entry = await toolGateway.commandWhitelist.add({
+        pattern: parsed.pattern.trim(),
+        matchType: parsed.matchType ?? 'exact',
+        label: parsed.label,
+      });
+      sendJson(res, 200, { entry });
+      return;
+    }
+
+    // ── DELETE /api/command-whitelist/:id ──
+    if (url.pathname.startsWith('/api/command-whitelist/') && req.method === 'DELETE') {
+      const id = decodeURIComponent(url.pathname.replace('/api/command-whitelist/', ''));
+      const ok = await toolGateway.commandWhitelist.remove(id);
+      sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'Entry not found' });
+      return;
+    }
+
+    // ── POST /api/tool/run（仅白名单或无需确认的命令；其余请走 Agent 对话确认流）──
     if (url.pathname === '/api/tool/run' && req.method === 'POST') {
       const parsed = await parseBody<RequestContext>(req);
-      const result = await agentCore.runCommand(parsed.command ?? '');
+      const command = parsed.command ?? '';
+      if (!command.trim()) {
+        sendJson(res, 400, { error: 'command is required' });
+        return;
+      }
+
+      const entries = await toolGateway.commandWhitelist.list();
+      const validation = validateCommand(command, entries);
+      if (!validation.allowed) {
+        sendJson(res, 403, { error: validation.reason, validation });
+        return;
+      }
+      if (validation.needsConfirmation) {
+        sendJson(res, 403, {
+          error: '该命令需要用户确认，请通过 Agent 对话执行，或先将命令加入白名单',
+          validation,
+        });
+        return;
+      }
+
+      const result = await agentCore.runCommand(command);
       sendJson(res, 200, result);
       return;
     }
@@ -635,6 +753,7 @@ export function startRuntimeServer() {
 
       const taskId = `task-${Date.now()}`;
       const confirmHook = createConfirmHook(session.sessionId, taskId, writeEvent);
+      const commandConfirmHook = createCommandConfirmHook(session.sessionId, taskId, writeEvent);
 
       try {
         await agentCore.runTask(
@@ -642,7 +761,7 @@ export function startRuntimeServer() {
           prompt ?? '',
           selectedFile ?? null,
           writeEvent,
-          confirmHook,
+          { onConfirm: confirmHook, onCommandConfirm: commandConfirmHook },
         );
       } catch (error: unknown) {
         writeEvent({ type: 'error', message: error instanceof Error ? error.message : 'Unknown error' });
@@ -668,6 +787,28 @@ export function startRuntimeServer() {
       pendingConfirms.delete(confirmId);
       pending.resolve(answer ?? '');
       sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    // ── POST /api/agent/command-confirm ──
+    if (url.pathname === '/api/agent/command-confirm' && req.method === 'POST') {
+      const { confirmId, decision } = await parseBody<CommandConfirmPayload>(req);
+      if (!confirmId || !decision) {
+        sendJson(res, 400, { error: 'confirmId and decision are required' });
+        return;
+      }
+      if (!['allow_once', 'allow_whitelist', 'deny'].includes(decision)) {
+        sendJson(res, 400, { error: 'invalid decision' });
+        return;
+      }
+      const pending = pendingCommandConfirms.get(confirmId);
+      if (!pending) {
+        sendJson(res, 404, { error: 'Command confirm request not found or expired' });
+        return;
+      }
+      pendingCommandConfirms.delete(confirmId);
+      pending.resolve(decision);
+      sendJson(res, 200, { ok: true, decision });
       return;
     }
 

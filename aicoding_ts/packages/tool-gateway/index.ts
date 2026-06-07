@@ -1,13 +1,27 @@
-import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { TreeNode, WorkspaceFile } from '../workspace-manager/index.ts';
 import type { ToolInfo } from '../shared/types.ts';
 import { createMcpServer, type McpServer } from '../mcp-server/index.ts';
+import { validateCommand } from './command-safety.ts';
+import { createCommandWhitelistStore } from './command-whitelist-store.ts';
+import {
+  executeCommand,
+  type CommandConfirmHook,
+  type RunCommandResult,
+} from './run-command.ts';
+import { diffFileAgainstSnapshot } from './diff-file.ts';
+import { readLints } from './read-lints.ts';
+import { createToolCallLogStore } from './tool-call-log.ts';
+
+export type { CommandConfirmHook, CommandConfirmDecision, CommandConfirmRequest } from './run-command.ts';
+export type { WhitelistEntry, CommandRisk } from './command-safety.ts';
+export type { CommandWhitelistStore } from './command-whitelist-store.ts';
 
 type WorkspaceManager = {
   rootDir: string;
   projectId: string;
+  projectDir: string;
   getRootDir: () => string;
   findFile: (path: string) => WorkspaceFile | null;
   updateFile: (path: string, content: string) => Promise<unknown>;
@@ -21,11 +35,6 @@ type WorkspaceManager = {
   loadFromDisk: () => Promise<unknown>;
 };
 
-function splitCommand(command: string): string[] {
-  const parts = command.trim().split(/\s+/);
-  return [parts[0], ...parts.slice(1)].filter(Boolean);
-}
-
 function buildInputSchema(properties: Record<string, unknown>, required: string[] = []) {
   return {
     type: 'object',
@@ -35,7 +44,16 @@ function buildInputSchema(properties: Record<string, unknown>, required: string[
   };
 }
 
-function buildToolDefinitions(workspaceManager: WorkspaceManager) {
+type RunCommandContext = {
+  onCommandConfirm?: CommandConfirmHook;
+};
+
+function buildToolDefinitions(
+  workspaceManager: WorkspaceManager,
+  runCommandSafe: (command: string, ctx?: RunCommandContext) => Promise<RunCommandResult>,
+  readLintsFn: (path?: string) => Promise<unknown>,
+  diffFileFn: (path: string, snapshotId?: string) => Promise<unknown>,
+) {
   return [
     {
       name: 'read_file',
@@ -67,7 +85,8 @@ function buildToolDefinitions(workspaceManager: WorkspaceManager) {
     },
     {
       name: 'patch_file',
-      description: '根据局部补丁修改工作区中的文件',
+      description:
+        '局部替换文件。支持 unified diff、before\\n---\\nafter、before => after、@@ line N 行号锚点。失败时先 read_file。',
       inputSchema: buildInputSchema(
         {
           path: { type: 'string', minLength: 1 },
@@ -96,27 +115,43 @@ function buildToolDefinitions(workspaceManager: WorkspaceManager) {
     },
     {
       name: 'run_command',
-      description: '在工作区目录中执行命令',
+      description:
+        '在工作区目录执行 shell 命令。非白名单命令会暂停并等待用户确认（类似 Cursor）。安装依赖、删除文件等高风险操作需用户批准。',
       inputSchema: buildInputSchema(
         {
           command: { type: 'string', minLength: 1 },
         },
         ['command'],
       ),
-      handler: async ({ command }: Record<string, unknown>) => {
-        return new Promise((resolve) => {
-          const [cmd, ...args] = splitCommand(String(command ?? ''));
-          execFile(cmd, args, { cwd: workspaceManager.getRootDir() }, (error: unknown, stdout: string, stderr: string) => {
-            resolve({
-              command,
-              status: error ? 'failed' : 'success',
-              code: error && typeof error === 'object' && 'code' in error ? Number((error as { code?: number }).code ?? 0) : 0,
-              stdout: stdout.trim(),
-              stderr: stderr.trim(),
-            });
-          });
-        });
-      },
+      handler: ({ command }: Record<string, unknown>) =>
+        runCommandSafe(String(command ?? '')),
+    },
+    {
+      name: 'read_lints',
+      description:
+        '读取工作区或指定文件的静态检查问题（TypeScript tsc、启发式规则）。只读，无需命令确认。复杂 lint 脚本请用 run_command。',
+      inputSchema: buildInputSchema(
+        {
+          path: { type: 'string', description: '相对工作区的文件路径，省略则检查整个项目' },
+        },
+        [],
+      ),
+      handler: ({ path }: Record<string, unknown>) =>
+        readLintsFn(path ? String(path) : undefined),
+    },
+    {
+      name: 'diff_file',
+      description:
+        '对比指定文件与版本快照中的内容，返回增删行。默认与最新快照对比；可传 snapshotId。',
+      inputSchema: buildInputSchema(
+        {
+          path: { type: 'string', minLength: 1 },
+          snapshotId: { type: 'string' },
+        },
+        ['path'],
+      ),
+      handler: ({ path, snapshotId }: Record<string, unknown>) =>
+        diffFileFn(String(path ?? ''), snapshotId ? String(snapshotId) : undefined),
     },
     {
       name: 'list_workspace',
@@ -229,8 +264,88 @@ function buildPromptDefinitions() {
 }
 
 export function createToolGateway(workspaceManager: WorkspaceManager) {
+  const whitelistStore = createCommandWhitelistStore(workspaceManager.projectDir);
+  const cwd = () => workspaceManager.getRootDir();
+
+  async function runCommandSafe(
+    command: string,
+    ctx: RunCommandContext = {},
+  ): Promise<RunCommandResult> {
+    const entries = await whitelistStore.list();
+    const validation = validateCommand(command, entries);
+
+    if (!validation.allowed) {
+      return {
+        command,
+        status: 'blocked',
+        error: validation.reason,
+        risk: validation.risk,
+      };
+    }
+
+    if (!validation.needsConfirmation) {
+      const result = await executeCommand(validation.normalizedCommand, cwd(), validation.timeoutMs);
+      return { ...result, risk: validation.risk, whitelisted: true };
+    }
+
+    if (!ctx.onCommandConfirm) {
+      return {
+        command,
+        status: 'denied',
+        error: '该命令需要用户确认，但当前没有可用的确认通道',
+        risk: validation.risk,
+      };
+    }
+
+    const decision = await ctx.onCommandConfirm({
+      command: validation.normalizedCommand,
+      cwd: cwd(),
+      validation,
+    });
+
+    if (decision === 'deny') {
+      return {
+        command: validation.normalizedCommand,
+        status: 'denied',
+        error: '用户拒绝执行该命令',
+        risk: validation.risk,
+      };
+    }
+
+    if (decision === 'allow_whitelist') {
+      await whitelistStore.addFromCommand(validation.normalizedCommand);
+    }
+
+    const result = await executeCommand(validation.normalizedCommand, cwd(), validation.timeoutMs);
+    return {
+      ...result,
+      risk: validation.risk,
+      confirmed: true,
+      whitelisted: decision === 'allow_whitelist',
+    };
+  }
+
+  const readLintsFn = (path?: string) =>
+    readLints({ workspaceRoot: cwd(), path });
+
+  const diffFileFn = (path: string, snapshotId?: string) =>
+    diffFileAgainstSnapshot({
+      path,
+      workspaceRoot: cwd(),
+      projectDir: workspaceManager.projectDir,
+      snapshotId,
+      listVersions: async () => {
+        const versions = await workspaceManager.listVersions();
+        return versions.map((v) => ({
+          id: String((v as { id: string }).id),
+          name: String((v as { name?: string }).name ?? (v as { id: string }).id),
+          snapshotPath: String((v as { snapshotPath: string }).snapshotPath),
+        }));
+      },
+    });
+
   const mcpServer: McpServer = createMcpServer({
-    tools: buildToolDefinitions(workspaceManager),
+    tools: buildToolDefinitions(workspaceManager, runCommandSafe, readLintsFn, diffFileFn),
     resources: buildResourceDefinitions(workspaceManager),
     prompts: buildPromptDefinitions(),
   });
@@ -248,6 +363,7 @@ export function createToolGateway(workspaceManager: WorkspaceManager) {
   };
 
   const toolRecords = new Map<string, ToolRecord>();
+  const callLog = createToolCallLogStore();
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function wrapWithStats(name: string, description: string, fn: (...args: any[]) => unknown | Promise<unknown>): (...args: any[]) => Promise<unknown> {
@@ -269,20 +385,40 @@ export function createToolGateway(workspaceManager: WorkspaceManager) {
       const start = Date.now();
       try {
         const result = await fn(...args);
-        record.callCount++;
-        record.successCount++;
         const duration = Date.now() - start;
+        record.callCount++;
+        callLog.append(name, args, result, duration);
+        const ok =
+          result &&
+          typeof result === 'object' &&
+          !(result as Record<string, unknown>).error &&
+          (result as Record<string, unknown>).ok !== false &&
+          (result as Record<string, unknown>).status !== 'failed' &&
+          (result as Record<string, unknown>).status !== 'denied' &&
+          (result as Record<string, unknown>).action !== 'patch_failed';
+        if (ok) record.successCount++;
         record.avgDurationMs = record.avgDurationMs === 0 ? duration : Math.round(record.avgDurationMs * 0.9 + duration * 0.1);
         record.lastCalledAt = new Date().toISOString();
         return result;
       } catch (err) {
-        record.callCount++;
         const duration = Date.now() - start;
+        record.callCount++;
+        callLog.append(name, args, null, duration, err);
         record.avgDurationMs = record.avgDurationMs === 0 ? duration : Math.round(record.avgDurationMs * 0.9 + duration * 0.1);
         record.lastCalledAt = new Date().toISOString();
         throw err;
       }
     };
+  }
+
+  function registryIsToolEnabled(name: string): boolean {
+    const record = toolRecords.get(name);
+    if (!record) return true;
+    return record.enabled;
+  }
+
+  function registryGetToolLogs(name: string, limit = 30) {
+    return callLog.getLogs(name, limit);
   }
 
   function registryGetAllToolInfos(): ToolInfo[] {
@@ -338,24 +474,23 @@ export function createToolGateway(workspaceManager: WorkspaceManager) {
     restoreSnapshot: wrapWithStats('restore_snapshot', '从指定版本快照恢复当前工作区', (snapshotId: string) => {
       return workspaceManager.restoreSnapshot(snapshotId);
     }),
-    runCommand: wrapWithStats('run_command', '在工作区目录中执行命令', (command: string) => {
-      return new Promise((resolve) => {
-        const [cmd, ...args] = splitCommand(command);
-        execFile(cmd, args, { cwd: workspaceManager.getRootDir() }, (error: unknown, stdout: string, stderr: string) => {
-          resolve({
-            command,
-            status: error ? 'failed' : 'success',
-            code: error && typeof error === 'object' && 'code' in error ? Number((error as { code?: number }).code ?? 0) : 0,
-            stdout: stdout.trim(),
-            stderr: stderr.trim(),
-          });
-        });
-      });
-    }),
+    runCommand: wrapWithStats(
+      'run_command',
+      '在工作区目录中执行命令（非白名单命令需用户确认）',
+      (command: string, ctx?: RunCommandContext) => runCommandSafe(command, ctx),
+    ),
+    readLints: wrapWithStats('read_lints', '读取静态检查与 lint 问题', (path?: string) => readLintsFn(path)),
+    diffFile: wrapWithStats('diff_file', '对比文件与版本快照差异', (path: string, snapshotId?: string) =>
+      diffFileFn(path, snapshotId),
+    ),
+    commandWhitelist: whitelistStore,
+    isToolEnabled: registryIsToolEnabled,
     registry: {
       getAllToolInfos: registryGetAllToolInfos,
       setToolEnabled: registrySetToolEnabled,
       testTool: registryTestTool,
+      getToolLogs: registryGetToolLogs,
+      isToolEnabled: registryIsToolEnabled,
     },
     mcp: mcpServer,
   };

@@ -150,17 +150,43 @@
           </div>
           <div id="toolList" class="version-list"></div>
         </section>
+        <section class="version-card" id="commandWhitelistSection">
+          <div class="version-card-header">
+            <div>
+              <strong>命令白名单</strong>
+              <span id="whitelistStatus">加载中…</span>
+            </div>
+            <button id="refreshWhitelistBtn" type="button" class="ghost-button">刷新</button>
+          </div>
+          <form id="whitelistAddForm" class="whitelist-add-form">
+            <input id="whitelistPatternInput" type="text" placeholder="例如 npm test 或 npm run" autocomplete="off" />
+            <select id="whitelistMatchTypeSelect">
+              <option value="exact">完全匹配</option>
+              <option value="prefix">前缀匹配</option>
+              <option value="command">命令名</option>
+            </select>
+            <button type="submit" class="ghost-button">添加</button>
+          </form>
+          <div id="whitelistList" class="version-list"></div>
+        </section>
         <pre id="summary" class="summary-box"></pre>
       </section>
     </div>
 
     <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
     <div id="commandConfirmOverlay" class="tree-dialog-overlay" aria-hidden="true">
-      <div class="tree-dialog">
-        <h3>命令执行确认（占位）</h3>
-        <p>后端接入风险分级后，此处将展示命令、cwd、风险等级与原因，并提供“允许一次/拒绝”等操作。</p>
-        <div class="tree-dialog-actions">
-          <button type="button" id="commandConfirmCloseBtn">关闭</button>
+      <div class="tree-dialog command-confirm-dialog">
+        <h3>命令执行确认</h3>
+        <p id="commandConfirmReason" class="command-confirm-reason"></p>
+        <div class="command-confirm-meta">
+          <span id="commandConfirmRisk" class="command-risk-badge"></span>
+          <code id="commandConfirmCwd" class="command-confirm-cwd"></code>
+        </div>
+        <pre id="commandConfirmText" class="command-confirm-text"></pre>
+        <div class="tree-dialog-actions command-confirm-actions">
+          <button type="button" id="commandConfirmDenyBtn" class="ghost-button">拒绝</button>
+          <button type="button" id="commandConfirmOnceBtn">允许一次</button>
+          <button type="button" id="commandConfirmWhitelistBtn" class="confirm-submit-btn">加入白名单并执行</button>
         </div>
       </div>
     </div>
