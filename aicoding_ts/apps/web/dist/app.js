@@ -246,6 +246,13 @@ const TASK_PHASES = [
 function setTaskPhase(phase, detail) {
     lastTaskPhase = phase;
     lastTaskPhaseUpdatedAt = Date.now();
+    // 任务进入活跃/失败/等待态时自动展开摘要面板,避免用户看不到状态变化。
+    // 'idle' 不主动改动状态;'succeeded' 也不主动折叠,保留用户当前选择。
+    if (phase !== 'idle' && phase !== 'succeeded') {
+        const logPanel = document.querySelector('#logPanel');
+        if (logPanel && !logPanel.open)
+            logPanel.open = true;
+    }
     renderTaskStatusSteps(detail);
     renderWaitingUserPanel();
     pushStatusHistory(phase, detail);
@@ -1968,6 +1975,10 @@ chatForm.addEventListener('submit', async (event) => {
     appendMessage('user', prompt);
     promptInput.value = '';
     setAgentStatus('running');
+    // 提交即展开执行摘要,任务进展立即可见(后端 task_status 还没回时也不留空白)。
+    const logPanel = document.querySelector('#logPanel');
+    if (logPanel && !logPanel.open)
+        logPanel.open = true;
     lastRunCommandDetail = null;
     lastFailureText = null;
     try {

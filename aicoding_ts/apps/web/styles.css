@@ -1719,3 +1719,39 @@ textarea {
   border-color: rgba(34, 211, 238, 0.45);
   box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.08);
 }
+
+/* ── 可折叠面板(Agent 执行摘要)── */
+.collapsible-panel { padding: 0; }
+.collapsible-panel > :not(summary) {
+  margin-left: 18px;
+  margin-right: 18px;
+}
+.collapsible-panel > :first-of-type:not(summary) { margin-top: 12px; }
+.collapsible-panel > :last-child { margin-bottom: 18px; }
+
+.collapsible-header {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  padding: 14px 18px;
+  border-radius: 16px;
+  transition: background 0.15s ease;
+}
+.collapsible-header::-webkit-details-marker { display: none; }
+.collapsible-header:hover { background: rgba(255, 255, 255, 0.03); }
+
+.collapsible-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  font-size: 12px;
+  transition: transform 0.2s ease;
+}
+details[open] > .collapsible-header .collapsible-indicator {
+  transform: rotate(180deg);
+}

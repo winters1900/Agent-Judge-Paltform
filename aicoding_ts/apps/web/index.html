@@ -89,13 +89,14 @@
         </aside>
       </main>
 
-      <section class="panel log-panel">
-        <div class="panel-header">
+      <details id="logPanel" class="panel log-panel collapsible-panel">
+        <summary class="panel-header collapsible-header">
           <div>
             <h2>Agent 执行摘要</h2>
-            <span>计划 / 状态 / 结果</span>
+            <span>计划 / 状态 / 结果(默认折叠,任务运行时自动展开)</span>
           </div>
-        </div>
+          <span class="collapsible-indicator" aria-hidden="true">▾</span>
+        </summary>
         <div class="task-status-row">
           <div class="task-status-steps" id="taskStatusSteps" aria-label="任务状态"></div>
           <button id="retryLastTaskBtn" type="button" class="ghost-button" title="重新发送上一条用户需求">重试上一任务</button>
@@ -131,7 +132,7 @@
           <button id="appendLastTaskMemoryBtn" type="button" class="ghost-button" disabled>💾 把这次任务经验加入项目知识</button>
         </div>
         <pre id="summary" class="summary-box"></pre>
-      </section>
+      </details>
     </div>
 
     <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
