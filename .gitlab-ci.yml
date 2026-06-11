@@ -27,6 +27,11 @@ aicoding_ts:build:
     - aicoding_ts
   interruptible: true
   script:
-    - cd aicoding_ts
+    - |
+      $repoDir = (Get-Location).Path
+      if (-not (Test-Path -LiteralPath (Join-Path $repoDir 'aicoding_ts'))) {
+        $repoDir = 'F:\gitlab-runner-builds\Ux-DjYTyZ\0\greatgroup\software3'
+      }
+      Set-Location -LiteralPath (Join-Path $repoDir 'aicoding_ts')
     - npm ci
     - npm run build:web
