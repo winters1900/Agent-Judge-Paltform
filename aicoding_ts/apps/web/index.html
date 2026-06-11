@@ -28,7 +28,14 @@
           </div>
           <span id="agentStatusBadge" class="agent-status-badge" data-status="idle">空闲</span>
           <button id="newSessionBtn" type="button">新建会话</button>
-          <a class="ghost-button" href="/mcp-config.html">MCP 配置</a>
+          <nav class="topbar-config-nav" aria-label="配置入口">
+            <a class="ghost-button" href="/mcp-config.html">MCP</a>
+            <a class="ghost-button" href="/tools.html">工具</a>
+            <a class="ghost-button" href="/skills.html">Skill</a>
+            <a class="ghost-button" href="/whitelist.html">白名单</a>
+            <a class="ghost-button" href="/snapshots.html">快照</a>
+            <a class="ghost-button" href="/project-memory.html">项目知识</a>
+          </nav>
           <div class="status-pill">运行中 · Runtime + Web</div>
         </div>
       </header>
@@ -120,82 +127,9 @@
           <button id="toggleRawSummaryBtn" type="button" class="ghost-button" title="切换原始 JSON 显示">查看原始</button>
         </div>
         <div id="structuredSummary" class="structured-summary"></div>
-        <div class="preview-panel">
-          <div class="preview-header">
-            <strong>预览（占位）</strong>
-            <span class="preview-hint">等待 Preview Runner 接入后启用</span>
-          </div>
-          <div class="preview-body">
-            <div class="preview-item"><span class="preview-key">预览 URL</span><span class="preview-val muted">未接入</span></div>
-            <div class="preview-item"><span class="preview-key">构建状态</span><span class="preview-val muted">未接入</span></div>
-            <div class="preview-item"><span class="preview-key">构建错误</span><span class="preview-val muted">未接入</span></div>
-          </div>
+        <div class="task-memory-cta">
+          <button id="appendLastTaskMemoryBtn" type="button" class="ghost-button" disabled>💾 把这次任务经验加入项目知识</button>
         </div>
-        <section class="version-card">
-          <div class="version-card-header">
-            <div>
-              <strong>版本快照</strong>
-              <span id="versionStatus">0 个版本</span>
-            </div>
-          </div>
-          <div id="versionList" class="version-list"></div>
-        </section>
-        <section class="version-card" id="toolManagement">
-          <div class="version-card-header">
-            <div>
-              <strong>工具管理</strong>
-              <span id="toolStatus">加载中…</span>
-            </div>
-            <button id="refreshToolsBtn" type="button" class="ghost-button">刷新</button>
-          </div>
-          <div id="toolList" class="version-list"></div>
-        </section>
-        <section class="version-card" id="skillManagement">
-          <div class="version-card-header">
-            <div>
-              <strong>Skill 管理</strong>
-              <span id="skillStatus">加载中…</span>
-            </div>
-            <div class="skill-header-actions">
-              <button id="importSkillBtn" type="button" class="ghost-button">导入</button>
-              <button id="refreshSkillsBtn" type="button" class="ghost-button">刷新</button>
-            </div>
-          </div>
-          <div id="skillList" class="version-list"></div>
-        </section>
-        <section class="version-card" id="commandWhitelistSection">
-          <div class="version-card-header">
-            <div>
-              <strong>命令白名单</strong>
-              <span id="whitelistStatus">加载中…</span>
-            </div>
-            <button id="refreshWhitelistBtn" type="button" class="ghost-button">刷新</button>
-          </div>
-          <form id="whitelistAddForm" class="whitelist-add-form">
-            <input id="whitelistPatternInput" type="text" placeholder="例如 npm test 或 npm run" autocomplete="off" />
-            <select id="whitelistMatchTypeSelect">
-              <option value="exact">完全匹配</option>
-              <option value="prefix">前缀匹配</option>
-              <option value="command">命令名</option>
-            </select>
-            <button type="submit" class="ghost-button">添加</button>
-          </form>
-          <div id="whitelistList" class="version-list"></div>
-        </section>
-        <section class="version-card" id="projectMemoryPanel">
-          <div class="version-card-header">
-            <div>
-              <strong>项目知识</strong>
-              <span id="projectMemoryStatus">未加载</span>
-            </div>
-            <div class="project-memory-actions">
-              <button id="appendLastTaskMemoryBtn" type="button" class="ghost-button">保存任务经验</button>
-              <button id="reloadProjectMemoryBtn" type="button" class="ghost-button">重载</button>
-              <button id="saveProjectMemoryBtn" type="button" class="ghost-button">保存</button>
-            </div>
-          </div>
-          <textarea id="projectMemoryEditor" class="project-memory-editor" spellcheck="false" placeholder="# 项目记忆"></textarea>
-        </section>
         <pre id="summary" class="summary-box"></pre>
       </section>
     </div>
@@ -214,34 +148,6 @@
           <button type="button" id="commandConfirmDenyBtn" class="ghost-button">拒绝</button>
           <button type="button" id="commandConfirmOnceBtn">允许一次</button>
           <button type="button" id="commandConfirmWhitelistBtn" class="confirm-submit-btn">加入白名单并执行</button>
-        </div>
-      </div>
-    </div>
-    <div id="skillImportOverlay" class="tree-dialog-overlay" aria-hidden="true">
-      <div class="tree-dialog skill-import-dialog">
-        <h3>导入 Skill</h3>
-        <div class="skill-import-tabs">
-          <label><input type="radio" name="skillImportMode" value="local_path" checked> 本地目录</label>
-          <label><input type="radio" name="skillImportMode" value="workspace_path"> 项目路径</label>
-          <label><input type="radio" name="skillImportMode" value="inline_markdown"> 粘贴内容</label>
-        </div>
-        <label class="tree-dialog-field" id="skillImportPathField">
-          <span>路径</span>
-          <input id="skillImportPathInput" type="text" placeholder="D:\external-skills\my-skill">
-        </label>
-        <label class="tree-dialog-field" id="skillImportNameField">
-          <span>Skill 名称</span>
-          <input id="skillImportNameInput" type="text" placeholder="my-skill">
-        </label>
-        <label class="tree-dialog-field" id="skillImportContentField">
-          <span>SKILL.md</span>
-          <textarea id="skillImportContentInput" rows="10" placeholder="---&#10;name: my-skill&#10;description: Use when...&#10;---"></textarea>
-        </label>
-        <div id="skillImportReport" class="skill-import-report">尚未预检查</div>
-        <div class="tree-dialog-actions">
-          <button id="skillImportPreviewBtn" type="button" class="ghost-button">预检查</button>
-          <button id="skillImportConfirmBtn" type="button" class="primary-button" disabled>确认导入</button>
-          <button id="skillImportCloseBtn" type="button" class="ghost-button">取消</button>
         </div>
       </div>
     </div>

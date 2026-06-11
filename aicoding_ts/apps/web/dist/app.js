@@ -8,8 +8,6 @@ const currentFile = document.querySelector('#currentFile');
 const editorSaveBadge = document.querySelector('#editorSaveBadge');
 const summary = document.querySelector('#summary');
 const snapshotBtn = document.querySelector('#snapshotBtn');
-const versionList = document.querySelector('#versionList');
-const versionStatus = document.querySelector('#versionStatus');
 const taskStatusSteps = document.querySelector('#taskStatusSteps');
 const retryLastTaskBtn = document.querySelector('#retryLastTaskBtn');
 const waitingUserPanel = document.querySelector('#waitingUserPanel');
@@ -40,15 +38,10 @@ const newSessionBtn = document.querySelector('#newSessionBtn');
 const workspacePathInput = document.querySelector('#workspacePathInput');
 const workspaceSuggestList = document.querySelector('#workspaceSuggestList');
 const loadWorkspaceBtn = document.querySelector('#loadWorkspaceBtn');
-const projectMemoryEditor = document.querySelector('#projectMemoryEditor');
-const projectMemoryStatus = document.querySelector('#projectMemoryStatus');
-const saveProjectMemoryBtn = document.querySelector('#saveProjectMemoryBtn');
-const reloadProjectMemoryBtn = document.querySelector('#reloadProjectMemoryBtn');
 const appendLastTaskMemoryBtn = document.querySelector('#appendLastTaskMemoryBtn');
 let selectedFile = null;
 let currentFileContent = '';
 let workspaceCache = [];
-let versionsCache = [];
 let currentAutoRefreshTimer = null;
 let editorSaveTimer = null;
 let expandedFolders = new Set();
@@ -655,7 +648,6 @@ loadWorkspaceBtn.addEventListener('click', async () => {
         saveWorkspaceHistory(path);
         workspaceCache = data.tree ?? [];
         renderTree(workspaceCache);
-        await loadVersions();
         if (data.sessionId) {
             currentSessionId = data.sessionId;
             const shortId = data.sessionId.replace('session-', '').slice(-6);
@@ -1284,54 +1276,6 @@ function scheduleWorkspaceRefresh(delayMs = 0) {
         loadWorkspace();
     }, delayMs);
 }
-function renderVersions(versions) {
-    versionsCache = versions;
-    versionStatus.textContent = `${versions.length} 个版本`;
-    versionList.innerHTML = '';
-    if (versions.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'version-empty';
-        empty.textContent = '还没有快照。创建一个快照后，就可以在这里查看和回滚版本。';
-        versionList.appendChild(empty);
-        return;
-    }
-    versions.forEach((version) => {
-        const item = document.createElement('article');
-        item.className = 'version-item';
-        item.innerHTML = `
-      <div class="version-item-header">
-        <div>
-          <div class="version-item-title"></div>
-          <div class="version-item-id"></div>
-        </div>
-      </div>
-      <div class="version-item-description"></div>
-      <div class="version-item-meta"></div>
-      <div class="version-item-actions">
-        <button type="button" class="version-restore-btn">回滚到此版本</button>
-      </div>
-    `;
-        item.querySelector('.version-item-title').textContent = version.name;
-        item.querySelector('.version-item-id').textContent = version.id;
-        item.querySelector('.version-item-description').textContent = version.description || '无描述';
-        item.querySelector('.version-item-meta').textContent = `创建时间：${formatVersionTime(version.createdAt)}`;
-        item.querySelector('.version-restore-btn').addEventListener('click', () => {
-            restoreSnapshot(version.id);
-        });
-        versionList.appendChild(item);
-    });
-}
-async function loadVersions() {
-    try {
-        const res = await fetch('/api/versions');
-        const data = await res.json();
-        renderVersions(data.versions || []);
-    }
-    catch {
-        versionStatus.textContent = '加载失败';
-        versionList.innerHTML = '<div class="version-empty">版本列表加载失败，请稍后重试。</div>';
-    }
-}
 async function syncSelectedFileAfterWorkspaceChange() {
     if (!selectedFile)
         return;
@@ -1368,8 +1312,13 @@ async function createSnapshot() {
         const data = await res.json();
         if (!res.ok || data.ok === false)
             throw new Error(data.error || '创建快照失败');
-        renderVersions(data.versions || []);
-        showToast({ kind: 'info', title: '已创建快照', message: data.snapshot?.id ?? '快照已保存' });
+        showToast({
+            kind: 'info',
+            title: '已创建快照',
+            message: data.snapshot?.id ?? '快照已保存',
+            actionLabel: '查看快照',
+            onAction: () => { window.location.href = '/snapshots.html'; },
+        });
     }
     catch (error) {
         showToast({ kind: 'error', title: '创建快照失败', message: error.message });
@@ -1377,37 +1326,6 @@ async function createSnapshot() {
     finally {
         snapshotBtn.disabled = false;
         snapshotBtn.textContent = '创建快照';
-    }
-}
-async function restoreSnapshot(snapshotId) {
-    cancelPendingEditorSave();
-    const target = versionsCache.find((item) => item.id === snapshotId);
-    const confirmed = await showConfirmDialog({
-        title: '回滚确认',
-        message: `确定回滚到 ${target?.name || snapshotId} 吗？当前工作区会被覆盖。`,
-        confirmLabel: '回滚',
-        danger: true,
-    });
-    if (!confirmed)
-        return;
-    try {
-        const res = await fetch('/api/version/restore', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ snapshotId }),
-        });
-        const data = await res.json();
-        if (!res.ok || data.ok === false)
-            throw new Error(data.error || '回滚失败');
-        workspaceCache = data.tree || [];
-        renderTree(workspaceCache);
-        renderVersions(data.versions || []);
-        await syncSelectedFileAfterWorkspaceChange();
-        summary.textContent = JSON.stringify(data.restoredVersion ?? data, null, 2);
-        showToast({ kind: 'info', title: '已回滚', message: `已回滚到快照 ${snapshotId}` });
-    }
-    catch (error) {
-        showToast({ kind: 'error', title: '回滚失败', message: error.message });
     }
 }
 async function openFile(path) {
@@ -1751,9 +1669,6 @@ async function streamChat(prompt) {
                 }
                 else if (event.type === 'skill') {
                     appendSkillEvent(event);
-                    if (event.action === 'activated') {
-                        void loadSkills();
-                    }
                 }
                 else if (event.type === 'result') {
                     finalResult = event.result;
@@ -2129,11 +2044,18 @@ async function submitCommandConfirm(decision) {
         }
         else {
             setAgentStatus('running');
-            if (decision === 'allow_whitelist')
-                void loadCommandWhitelist();
+            if (decision === 'allow_whitelist') {
+                showToast({
+                    kind: 'info',
+                    title: '已加入白名单',
+                    message: '可在"白名单"页查看和管理。',
+                    actionLabel: '打开白名单页',
+                    onAction: () => { window.location.href = '/whitelist.html'; },
+                });
+            }
             showToast({
                 kind: 'info',
-                title: decision === 'allow_whitelist' ? '已加入白名单' : '已允许',
+                title: '命令已允许',
                 message: '命令正在执行…',
             });
         }
@@ -2181,509 +2103,7 @@ document.addEventListener('click', () => {
     hideSuggestList();
     hideSessionDropdown();
 });
-// ── 工具管理 ──
-const toolManagement = document.querySelector('#toolManagement');
-const toolList = document.querySelector('#toolList');
-const toolStatus = document.querySelector('#toolStatus');
-const refreshToolsBtnEl = document.querySelector('#refreshToolsBtn');
-let toolCache = [];
-const TOOL_TEST_PRESETS = {
-    read_file: '{\n  "path": "package.json"\n}',
-    write_file: '{\n  "path": "test.txt",\n  "content": "hello"\n}',
-    patch_file: '{\n  "path": "test.txt",\n  "patch": "hello\\n---\\nworld"\n}',
-    search_in_workspace: '{\n  "query": "function"\n}',
-    run_command: '{\n  "command": "npm test"\n}',
-    read_lints: '{}',
-    diff_file: '{\n  "path": "package.json"\n}',
-    list_workspace: '{}',
-    list_versions: '{}',
-};
-async function showToolTestDialog(toolName) {
-    const preset = TOOL_TEST_PRESETS[toolName] ?? '{}';
-    const dialog = document.createElement('div');
-    dialog.className = 'tree-dialog-overlay visible';
-    dialog.setAttribute('aria-hidden', 'false');
-    dialog.innerHTML = `
-    <div class="tree-dialog tool-test-dialog">
-      <h3>测试工具：${toolName}</h3>
-      <label class="tool-test-label">参数 JSON</label>
-      <textarea class="tool-test-args" rows="8">${preset}</textarea>
-      <pre class="tool-test-result"></pre>
-      <div class="tree-dialog-actions">
-        <button type="button" data-role="cancel" class="ghost-button">关闭</button>
-        <button type="button" data-role="run" class="confirm-submit-btn">运行</button>
-      </div>
-    </div>
-  `;
-    document.body.appendChild(dialog);
-    const close = () => dialog.remove();
-    dialog.querySelector('[data-role="cancel"]').addEventListener('click', close);
-    dialog.addEventListener('click', (e) => { if (e.target === dialog)
-        close(); });
-    dialog.querySelector('[data-role="run"]').addEventListener('click', async () => {
-        const textarea = dialog.querySelector('.tool-test-args');
-        const resultEl = dialog.querySelector('.tool-test-result');
-        try {
-            const args = JSON.parse(textarea.value);
-            resultEl.textContent = '运行中…';
-            const res = await fetch(`/api/tools/${encodeURIComponent(toolName)}/test`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(args),
-            });
-            const data = await res.json();
-            resultEl.textContent = JSON.stringify(data, null, 2);
-            void loadTools();
-        }
-        catch (err) {
-            resultEl.textContent = `错误：${err.message}`;
-        }
-    });
-}
-async function showToolLogsDialog(toolName) {
-    const res = await fetch(`/api/tools/${encodeURIComponent(toolName)}/logs?limit=20`);
-    const data = await res.json();
-    const logs = data.logs ?? [];
-    const dialog = document.createElement('div');
-    dialog.className = 'tree-dialog-overlay visible';
-    dialog.innerHTML = `
-    <div class="tree-dialog tool-logs-dialog">
-      <h3>${toolName} 调用日志</h3>
-      <div class="tool-logs-list">${logs.length === 0 ? '<p class="version-empty">暂无记录</p>' : logs.map((l) => `
-        <div class="tool-log-entry ${l.ok ? 'ok' : 'fail'}">
-          <div class="tool-log-meta">${l.at} · ${l.durationMs}ms · ${l.ok ? '成功' : '失败'}</div>
-          <div class="tool-log-args">${l.argsPreview}</div>
-          <div class="tool-log-result">${l.resultPreview}</div>
-        </div>
-      `).join('')}</div>
-      <div class="tree-dialog-actions">
-        <button type="button" class="ghost-button">关闭</button>
-      </div>
-    </div>
-  `;
-    document.body.appendChild(dialog);
-    dialog.querySelector('button').addEventListener('click', () => dialog.remove());
-    dialog.addEventListener('click', (e) => { if (e.target === dialog)
-        dialog.remove(); });
-}
-async function loadTools() {
-    try {
-        const res = await fetch('/api/tools');
-        const data = await res.json();
-        toolCache = data.tools ?? [];
-        toolStatus.textContent = `${toolCache.length} 个工具`;
-        renderToolCards();
-    }
-    catch {
-        toolStatus.textContent = '加载失败';
-        toolList.innerHTML = '<div class="version-empty">工具列表加载失败</div>';
-    }
-}
-function renderToolCards() {
-    toolList.innerHTML = '';
-    if (toolCache.length === 0) {
-        toolList.innerHTML = '<div class="version-empty">暂无工具</div>';
-        return;
-    }
-    toolCache.forEach((tool) => {
-        const card = document.createElement('div');
-        card.className = 'tool-item';
-        const successRate = tool.callCount > 0 ? Math.round((tool.successCount / tool.callCount) * 100) : 0;
-        card.innerHTML = `
-      <div class="tool-item-header">
-        <span class="tool-item-name">${tool.name}</span>
-        <span class="tool-item-source ${tool.source}">${tool.source === 'local' ? '内置' : '外部'}</span>
-      </div>
-      <div class="tool-item-desc">${tool.description}</div>
-      <div class="tool-item-stats">
-        <span>调用 ${tool.callCount} 次</span>
-        <span>成功率 ${successRate}%</span>
-        <span>平均 ${tool.avgDurationMs}ms</span>
-      </div>
-      <div class="tool-toggle" data-tool="${tool.name}">
-        <span>${tool.enabled ? '已启用' : '已禁用'}</span>
-        <div class="tool-toggle-switch${tool.enabled ? ' on' : ''}"></div>
-      </div>
-      <div class="tool-item-actions">
-        ${tool.source === 'local' ? `<button type="button" class="ghost-button tool-test-btn" data-tool="${tool.name}">测试</button>` : ''}
-        <button type="button" class="ghost-button tool-logs-btn" data-tool="${tool.name}">日志</button>
-      </div>
-    `;
-        const toggle = card.querySelector('.tool-toggle');
-        toggle.addEventListener('click', () => toggleToolEnabled(tool.name, !tool.enabled));
-        card.querySelector('.tool-test-btn')?.addEventListener('click', () => showToolTestDialog(tool.name));
-        card.querySelector('.tool-logs-btn')?.addEventListener('click', () => showToolLogsDialog(tool.name));
-        toolList.appendChild(card);
-    });
-}
-async function toggleToolEnabled(toolName, enabled) {
-    const res = await fetch(`/api/tools/${encodeURIComponent(toolName)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled }),
-    });
-    if (!res.ok) {
-        showToast({ kind: 'error', title: '操作失败', message: '无法更新工具状态' });
-        return;
-    }
-    const tool = toolCache.find((t) => t.name === toolName);
-    if (tool)
-        tool.enabled = enabled;
-    renderToolCards();
-}
-refreshToolsBtnEl.addEventListener('click', loadTools);
-// ── Skill 管理 ──
-const skillList = document.querySelector('#skillList');
-const skillStatus = document.querySelector('#skillStatus');
-const refreshSkillsBtnEl = document.querySelector('#refreshSkillsBtn');
-const importSkillBtnEl = document.querySelector('#importSkillBtn');
-const skillImportOverlay = document.querySelector('#skillImportOverlay');
-const skillImportPathField = document.querySelector('#skillImportPathField');
-const skillImportNameField = document.querySelector('#skillImportNameField');
-const skillImportContentField = document.querySelector('#skillImportContentField');
-const skillImportPathInput = document.querySelector('#skillImportPathInput');
-const skillImportNameInput = document.querySelector('#skillImportNameInput');
-const skillImportContentInput = document.querySelector('#skillImportContentInput');
-const skillImportReportEl = document.querySelector('#skillImportReport');
-const skillImportPreviewBtn = document.querySelector('#skillImportPreviewBtn');
-const skillImportConfirmBtn = document.querySelector('#skillImportConfirmBtn');
-const skillImportCloseBtn = document.querySelector('#skillImportCloseBtn');
-let skillCache = [];
-let latestSkillImportReport = null;
-function formatSkillSource(source) {
-    const labels = {
-        builtin: '内置',
-        project: '项目',
-        user: '用户',
-        imported: '导入',
-    };
-    return labels[source] ?? source;
-}
-function formatLastUsed(value) {
-    if (!value)
-        return '从未使用';
-    return new Date(value).toLocaleString('zh-CN', { hour12: false });
-}
-async function loadSkills() {
-    try {
-        const res = await fetch('/api/skills');
-        const data = await res.json();
-        skillCache = data.skills ?? [];
-        const enabledCount = skillCache.filter((skill) => skill.enabled).length;
-        skillStatus.textContent = `${enabledCount}/${skillCache.length} 已启用`;
-        renderSkillCards();
-    }
-    catch {
-        skillStatus.textContent = '加载失败';
-        skillList.innerHTML = '<div class="version-empty">Skill 列表加载失败</div>';
-    }
-}
-function renderSkillCards() {
-    skillList.innerHTML = '';
-    if (skillCache.length === 0) {
-        skillList.innerHTML = '<div class="version-empty">暂无 Skill</div>';
-        return;
-    }
-    skillCache.forEach((skill) => {
-        const card = document.createElement('div');
-        card.className = 'skill-item';
-        const sourceClass = skill.source === 'builtin' ? 'local' : 'external';
-        const missingText = skill.missingCapabilities.length > 0
-            ? `缺失能力：${skill.missingCapabilities.join(', ')}`
-            : '能力满足';
-        card.innerHTML = `
-      <div class="tool-item-header">
-        <span class="tool-item-name">${skill.name}</span>
-        <span class="tool-item-source ${sourceClass}">${formatSkillSource(skill.source)}</span>
-      </div>
-      <div class="tool-item-desc">${skill.description}</div>
-      <div class="tool-item-stats">
-        <span>读取 ${skill.usage.readCount} 次</span>
-        <span>启用 ${skill.usage.activationCount} 次</span>
-        <span>${skill.allowImplicitInvocation ? '允许隐式触发' : '仅显式触发'}</span>
-      </div>
-      <div class="skill-meta">最近使用：${formatLastUsed(skill.usage.lastUsedAt)}</div>
-      <div class="${skill.missingCapabilities.length > 0 ? 'skill-warning' : 'skill-ok'}">${missingText}</div>
-      <div class="skill-actions">
-        <div class="tool-toggle" data-skill="${skill.name}">
-          <span>${skill.enabled ? '已启用' : '已禁用'}</span>
-          <div class="tool-toggle-switch${skill.enabled ? ' on' : ''}"></div>
-        </div>
-      </div>
-      <details class="skill-details">
-        <summary>详情</summary>
-        <div class="skill-detail-body">${[
-            `路径规则：${skill.filePatterns.length ? skill.filePatterns.join(', ') : '无'}`,
-            `标签：${skill.tags.length ? skill.tags.join(', ') : '无'}`,
-            `Shadowed：${skill.shadowed ? '是' : '否'}`,
-        ].join('\n')}</div>
-      </details>
-    `;
-        card.querySelector('.tool-toggle')
-            .addEventListener('click', () => toggleSkillEnabled(skill.name, !skill.enabled));
-        if (skill.source === 'project' || skill.source === 'imported') {
-            const actions = card.querySelector('.skill-actions');
-            const deleteBtn = document.createElement('button');
-            deleteBtn.type = 'button';
-            deleteBtn.className = 'skill-delete-button';
-            deleteBtn.textContent = '删除';
-            deleteBtn.addEventListener('click', () => deleteSkill(skill));
-            actions.appendChild(deleteBtn);
-        }
-        skillList.appendChild(card);
-    });
-}
-async function toggleSkillEnabled(skillName, enabled) {
-    const res = await fetch(`/api/skills/${encodeURIComponent(skillName)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled }),
-    });
-    if (!res.ok) {
-        showToast({ kind: 'error', title: '操作失败', message: '无法更新 Skill 状态' });
-        return;
-    }
-    const skill = skillCache.find((item) => item.name === skillName);
-    if (skill)
-        skill.enabled = enabled;
-    const enabledCount = skillCache.filter((item) => item.enabled).length;
-    skillStatus.textContent = `${enabledCount}/${skillCache.length} 已启用`;
-    renderSkillCards();
-}
-async function deleteSkill(skill) {
-    const confirmed = window.confirm(`确定删除 Skill "${skill.name}" 吗？此操作只允许删除项目/导入 Skill。`);
-    if (!confirmed)
-        return;
-    const res = await fetch(`/api/skills/${encodeURIComponent(skill.name)}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rootPath: skill.rootPath }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-        showToast({ kind: 'error', title: '删除失败', message: data.error ?? '无法删除 Skill' });
-        return;
-    }
-    showToast({ kind: 'info', title: 'Skill 已删除', message: skill.name });
-    await loadSkills();
-}
-refreshSkillsBtnEl.addEventListener('click', loadSkills);
-function getSkillImportMode() {
-    const checked = document.querySelector('input[name="skillImportMode"]:checked');
-    return checked?.value ?? 'local_path';
-}
-function buildSkillImportPayload(confirm = false) {
-    const mode = getSkillImportMode();
-    const payload = { mode, confirm };
-    if (mode === 'inline_markdown') {
-        payload.name = skillImportNameInput.value.trim();
-        payload.content = skillImportContentInput.value;
-    }
-    else {
-        payload.path = skillImportPathInput.value.trim();
-    }
-    return payload;
-}
-function renderSkillImportForm() {
-    const mode = getSkillImportMode();
-    skillImportPathField.style.display = mode === 'inline_markdown' ? 'none' : 'grid';
-    skillImportNameField.style.display = mode === 'inline_markdown' ? 'grid' : 'none';
-    skillImportContentField.style.display = mode === 'inline_markdown' ? 'grid' : 'none';
-    skillImportPathInput.placeholder = mode === 'workspace_path' ? '.aicoding/skills/my-skill' : 'D:\\external-skills\\my-skill';
-    latestSkillImportReport = null;
-    skillImportConfirmBtn.disabled = true;
-    skillImportReportEl.textContent = '尚未预检查';
-}
-function openSkillImportDialog() {
-    skillImportOverlay.classList.add('visible');
-    skillImportOverlay.setAttribute('aria-hidden', 'false');
-    renderSkillImportForm();
-}
-function closeSkillImportDialog() {
-    skillImportOverlay.classList.remove('visible');
-    skillImportOverlay.setAttribute('aria-hidden', 'true');
-}
-function renderSkillImportReport(report) {
-    const lines = [
-        `识别结果：${report.recognized ? '成功' : '失败'}`,
-        `格式：${report.format}`,
-        `名称：${report.name}`,
-        `描述：${report.description}`,
-        `目标位置：${report.targetPath}`,
-        `允许隐式触发：${report.allowImplicitInvocation ? '是' : '否'}`,
-        `需要能力：${report.requiredCapabilities.length ? report.requiredCapabilities.join(', ') : '无'}`,
-        `缺失能力：${report.missingCapabilities.length ? report.missingCapabilities.join(', ') : '无'}`,
-        `资源：${report.resources.length ? report.resources.join(', ') : '无'}`,
-        `脚本：${report.scripts.length ? report.scripts.join(', ') : '无'}`,
-        `风险提示：${report.warnings.length ? report.warnings.join('; ') : '无'}`,
-        `冲突：${report.conflicts.length ? report.conflicts.join('; ') : '无'}`,
-    ];
-    skillImportReportEl.textContent = lines.join('\n');
-}
-async function previewSkillImport() {
-    skillImportPreviewBtn.disabled = true;
-    skillImportReportEl.textContent = '正在预检查...';
-    try {
-        const res = await fetch('/api/skills/import/preview', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(buildSkillImportPayload(false)),
-        });
-        const data = await res.json();
-        if (!res.ok || !data.ok || !data.report) {
-            latestSkillImportReport = null;
-            skillImportConfirmBtn.disabled = true;
-            skillImportReportEl.textContent = `预检查失败：${data.error ?? '未知错误'}`;
-            return;
-        }
-        latestSkillImportReport = data.report;
-        renderSkillImportReport(data.report);
-        skillImportConfirmBtn.disabled = data.report.conflicts.length > 0;
-    }
-    finally {
-        skillImportPreviewBtn.disabled = false;
-    }
-}
-async function confirmSkillImport() {
-    if (!latestSkillImportReport)
-        return;
-    skillImportConfirmBtn.disabled = true;
-    try {
-        const res = await fetch('/api/skills/import', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(buildSkillImportPayload(true)),
-        });
-        const data = await res.json();
-        if (!res.ok || !data.ok) {
-            showToast({ kind: 'error', title: '导入失败', message: data.error ?? '无法导入 Skill' });
-            return;
-        }
-        showToast({ kind: 'info', title: 'Skill 已导入', message: latestSkillImportReport.name });
-        closeSkillImportDialog();
-        await loadSkills();
-    }
-    finally {
-        skillImportConfirmBtn.disabled = false;
-    }
-}
-document.querySelectorAll('input[name="skillImportMode"]').forEach((input) => {
-    input.addEventListener('change', renderSkillImportForm);
-});
-importSkillBtnEl.addEventListener('click', openSkillImportDialog);
-skillImportCloseBtn.addEventListener('click', closeSkillImportDialog);
-skillImportPreviewBtn.addEventListener('click', previewSkillImport);
-skillImportConfirmBtn.addEventListener('click', confirmSkillImport);
-const whitelistList = document.querySelector('#whitelistList');
-const whitelistStatus = document.querySelector('#whitelistStatus');
-const refreshWhitelistBtn = document.querySelector('#refreshWhitelistBtn');
-const whitelistAddForm = document.querySelector('#whitelistAddForm');
-const whitelistPatternInput = document.querySelector('#whitelistPatternInput');
-const whitelistMatchTypeSelect = document.querySelector('#whitelistMatchTypeSelect');
-let whitelistCache = [];
-async function loadCommandWhitelist() {
-    try {
-        const res = await fetch('/api/command-whitelist');
-        const data = await res.json();
-        whitelistCache = data.entries ?? [];
-        whitelistStatus.textContent = `${whitelistCache.length} 条规则`;
-        renderWhitelistEntries();
-    }
-    catch {
-        whitelistStatus.textContent = '加载失败';
-        whitelistList.innerHTML = '<div class="version-empty">白名单加载失败</div>';
-    }
-}
-function renderWhitelistEntries() {
-    whitelistList.innerHTML = '';
-    if (whitelistCache.length === 0) {
-        whitelistList.innerHTML = '<div class="version-empty">暂无白名单，可在命令确认时添加</div>';
-        return;
-    }
-    whitelistCache.forEach((entry) => {
-        const card = document.createElement('div');
-        card.className = 'whitelist-item';
-        const matchLabel = entry.matchType === 'exact' ? '完全匹配' : entry.matchType === 'prefix' ? '前缀' : '命令名';
-        card.innerHTML = `
-      <div class="whitelist-item-header">
-        <code class="whitelist-pattern">${entry.pattern}</code>
-        <span class="whitelist-match-type">${matchLabel}</span>
-      </div>
-      <div class="whitelist-item-meta">${entry.label || entry.id}</div>
-      <button type="button" class="ghost-button whitelist-remove-btn" data-id="${entry.id}">删除</button>
-    `;
-        card.querySelector('.whitelist-remove-btn').addEventListener('click', () => removeWhitelistEntry(entry.id));
-        whitelistList.appendChild(card);
-    });
-}
-async function removeWhitelistEntry(id) {
-    const res = await fetch(`/api/command-whitelist/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    if (!res.ok) {
-        showToast({ kind: 'error', title: '删除失败', message: '无法删除白名单项' });
-        return;
-    }
-    await loadCommandWhitelist();
-    showToast({ kind: 'info', title: '已删除', message: '白名单规则已移除' });
-}
-whitelistAddForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const pattern = whitelistPatternInput.value.trim();
-    if (!pattern)
-        return;
-    const res = await fetch('/api/command-whitelist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            pattern,
-            matchType: whitelistMatchTypeSelect.value,
-            label: pattern,
-        }),
-    });
-    if (!res.ok) {
-        showToast({ kind: 'error', title: '添加失败', message: '无法添加白名单' });
-        return;
-    }
-    whitelistPatternInput.value = '';
-    await loadCommandWhitelist();
-    showToast({ kind: 'info', title: '已添加', message: `白名单：${pattern}` });
-});
-refreshWhitelistBtn.addEventListener('click', loadCommandWhitelist);
-async function loadProjectMemory() {
-    try {
-        projectMemoryStatus.textContent = '加载中…';
-        const res = await fetch('/api/project-memory');
-        if (!res.ok)
-            throw new Error('项目知识加载失败');
-        const data = await res.json();
-        projectMemoryEditor.value = data.content || data.template || '# 项目记忆\n';
-        projectMemoryStatus.textContent = data.exists ? '已加载' : '使用默认模板';
-    }
-    catch (error) {
-        projectMemoryStatus.textContent = '加载失败';
-        showToast({ kind: 'error', title: '项目知识加载失败', message: error.message });
-    }
-}
-async function saveProjectMemory() {
-    try {
-        projectMemoryStatus.textContent = '保存中…';
-        const res = await fetch('/api/project-memory', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: projectMemoryEditor.value }),
-        });
-        if (!res.ok)
-            throw new Error('项目知识保存失败');
-        const data = await res.json();
-        if (typeof data.content === 'string')
-            projectMemoryEditor.value = data.content;
-        projectMemoryStatus.textContent = data.updatedAt ? `已保存 ${new Date(data.updatedAt).toLocaleTimeString('zh-CN', { hour12: false })}` : '已保存';
-        showToast({ kind: 'info', title: '项目知识已保存', message: '后续会话会按任务自动检索这份知识。' });
-    }
-    catch (error) {
-        projectMemoryStatus.textContent = '保存失败';
-        showToast({ kind: 'error', title: '项目知识保存失败', message: error.message });
-    }
-}
+// ── 项目知识入口(主页保留:任务跑完后一键把经验加入项目知识)──
 async function appendLastTaskMemory() {
     if (!lastProjectMemoryEntry) {
         showToast({ kind: 'warn', title: '暂无可保存经验', message: '完成一次任务后再保存到项目知识。' });
@@ -2698,19 +2118,19 @@ async function appendLastTaskMemory() {
         });
         if (!res.ok)
             throw new Error('任务经验保存失败');
-        const data = await res.json();
-        if (typeof data.content === 'string')
-            projectMemoryEditor.value = data.content;
-        projectMemoryStatus.textContent = data.updatedAt ? `已追加 ${new Date(data.updatedAt).toLocaleTimeString('zh-CN', { hour12: false })}` : '已追加';
-        showToast({ kind: 'info', title: '任务经验已保存', message: '这条经验将参与后续会话的上下文检索。' });
+        showToast({
+            kind: 'info',
+            title: '任务经验已保存',
+            message: '已写入 project-memory.md',
+            actionLabel: '打开项目知识',
+            onAction: () => { window.location.href = '/project-memory.html'; },
+        });
     }
     catch (error) {
         appendLastTaskMemoryBtn.disabled = false;
         showToast({ kind: 'error', title: '保存任务经验失败', message: error.message });
     }
 }
-saveProjectMemoryBtn.addEventListener('click', saveProjectMemory);
-reloadProjectMemoryBtn.addEventListener('click', loadProjectMemory);
 appendLastTaskMemoryBtn.addEventListener('click', appendLastTaskMemory);
 appendLastTaskMemoryBtn.disabled = true;
 loadLayoutState();
@@ -2718,11 +2138,6 @@ applyLayoutWidths();
 initResizers();
 loadExpandedFolders();
 loadWorkspace();
-loadVersions();
-loadTools();
-loadSkills();
-loadCommandWhitelist();
-loadProjectMemory();
 // 添加模板生成按钮到新建菜单
 const newItemMenuElement = newItemMenu;
 if (newItemMenuElement) {
