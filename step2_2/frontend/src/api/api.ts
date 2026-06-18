@@ -93,7 +93,11 @@ export async function testTarget(body: {
   adapter_config: Record<string, unknown>;
   prompt?: string;
 }): Promise<TargetTestResult> {
-  const { data } = await http.post<TargetTestResult>("/evaluation-targets/test", body);
+  // 连通性测试会真实调用一次 agent（编程 agent 一轮 ReAct 可能数分钟），
+  // 故单独放宽超时，避免命中全局 60s 限制。
+  const { data } = await http.post<TargetTestResult>("/evaluation-targets/test", body, {
+    timeout: 200_000,
+  });
   return data;
 }
 

@@ -27,3 +27,7 @@ step2_2/运行指令.md
 
 # personal files
 .DS_Store
+
+# AI tool artifacts
+.codegraph/
+.reasonix/
