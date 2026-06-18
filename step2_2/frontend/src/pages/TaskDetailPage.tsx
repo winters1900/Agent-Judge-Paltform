@@ -10,7 +10,7 @@ import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { createRun, getTask, listRuns } from "../api/api";
+import { getTask, listRuns, runTask } from "../api/api";
 import { isRequestAborted } from "../api/client";
 import type { EvaluationRun, EvaluationTask } from "../api/types";
 import { useAbortableRequest } from "../hooks/useAbortableRequest";
@@ -63,14 +63,8 @@ export function TaskDetailPage() {
     if (Number.isNaN(id)) return;
     setStarting(true);
     try {
-      const run = await createRun({
-        run_code: `run_${Date.now()}`,
-        task_id: id,
-        status: "queued",
-        progress: 0,
-        summary: "已排队",
-      });
-      message.success("已创建运行实例");
+      const run = await runTask(id);
+      message.success("已发起评测，正在执行");
       navigate(`/runs/${run.id}`);
     } catch (e) {
       message.error((e as Error).message);
@@ -137,7 +131,7 @@ export function TaskDetailPage() {
           loading={starting}
           onClick={() => void startRun()}
         >
-          新建运行
+          发起评测
         </Button>
       </Space>
       {task && (

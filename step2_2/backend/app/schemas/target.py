@@ -36,3 +36,21 @@ class EvaluationTargetResponse(EvaluationTargetCreate):
     target_code: str
     created_at: datetime
     updated_at: datetime
+
+
+class TargetTestRequest(BaseModel):
+    """连通性测试：用一条示例输入 dry-run 被测对象，不落库。"""
+
+    adapter_type: str
+    endpoint: str | None = None
+    adapter_config: dict = {}
+    prompt: str = "你好，请用一句话自我介绍。"
+
+
+class TargetTestResponse(BaseModel):
+    succeeded: bool
+    output_text: str = ""
+    error: str | None = None
+    latency_ms: int = 0
+    total_tokens: int = 0
+    tool_calls: list[dict] = []

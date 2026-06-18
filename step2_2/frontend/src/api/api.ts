@@ -62,6 +62,41 @@ export async function deleteTarget(id: number): Promise<void> {
   await http.delete(`/evaluation-targets/${id}`);
 }
 
+export interface AdapterPreset {
+  adapter_type: string;
+  label: string;
+  endpoint: string;
+  needs_endpoint: boolean;
+  config: Record<string, unknown>;
+  hint: string;
+}
+
+/** 适配器配置预设（用于「新建目标」一键填充）。 */
+export async function listTargetPresets(): Promise<AdapterPreset[]> {
+  const { data } = await http.get<AdapterPreset[]>("/evaluation-targets/presets");
+  return data;
+}
+
+export interface TargetTestResult {
+  succeeded: boolean;
+  output_text: string;
+  error?: string | null;
+  latency_ms: number;
+  total_tokens: number;
+  tool_calls: Array<Record<string, unknown>>;
+}
+
+/** 连通性测试：用一条示例 prompt 真实调用一次被测对象（不落库）。 */
+export async function testTarget(body: {
+  adapter_type: string;
+  endpoint?: string | null;
+  adapter_config: Record<string, unknown>;
+  prompt?: string;
+}): Promise<TargetTestResult> {
+  const { data } = await http.post<TargetTestResult>("/evaluation-targets/test", body);
+  return data;
+}
+
 export async function listTasks(
   params?: {
     name?: string;
@@ -155,6 +190,18 @@ export async function createRun(body: {
   summary?: string | null;
 }): Promise<EvaluationRun> {
   const { data } = await http.post<EvaluationRun>("/evaluation-runs", body);
+  return data;
+}
+
+/** 一键发起评测：为任务创建一次运行并立即后台执行。 */
+export async function runTask(taskId: number): Promise<EvaluationRun> {
+  const { data } = await http.post<EvaluationRun>(`/evaluation-tasks/${taskId}/run`);
+  return data;
+}
+
+/** 触发一个已创建（queued）运行的实际执行。 */
+export async function startRun(id: number): Promise<{ run_id: number; status: string; message: string }> {
+  const { data } = await http.post(`/evaluation-runs/${id}/start`);
   return data;
 }
 

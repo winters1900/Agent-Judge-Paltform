@@ -1,6 +1,5 @@
-from datetime import datetime, timezone
+from uuid import uuid4
 
-from app.models.dataset import DatasetSample
 from app.models.run import EvaluationRun, EvaluationSampleResult
 from app.repositories.run_repository import RunRepository
 from app.schemas.run import RunCreate, SampleResultCreate
@@ -26,39 +25,23 @@ class RunManager:
         )
         return self.run_repository.create(run)
 
-    def start_run(self, task_id: int, run_code: str, sample_ids: list[int]) -> EvaluationRun:
+    def start_run(self, task_id: int, run_code: str | None = None) -> EvaluationRun:
+        """创建一次处于 queued 状态的运行；真正的执行由 EvaluationEngine 后台异步完成。
+
+        注意：本方法只负责落库，不再伪造样本结果。调用方应随后通过 runner.launch_run
+        触发执行（见 run_api / task_api 的 /run、/start 端点）。
+        """
+        code = run_code or f"run_{uuid4().hex[:8]}"
         run = EvaluationRun(
-            run_code=run_code,
+            run_code=code,
             task_id=task_id,
-            status="running",
+            status="queued",
             progress=0,
-            current_sample_id=sample_ids[0] if sample_ids else None,
             retry_count=0,
-            summary="任务已启动",
-            trace_id=f"run_{run_code}",
-            started_at=datetime.now(timezone.utc),
+            summary="已排队，等待执行",
+            trace_id=f"run_{code}",
         )
-        created_run = self.run_repository.create(run)
-        if sample_ids:
-            for sample_id in sample_ids:
-                self.run_repository.create_sample_result(
-                    EvaluationSampleResult(
-                        run_id=created_run.id,
-                        sample_id=sample_id,
-                        status="completed",
-                        input_snapshot={"sample_id": sample_id},
-                        output_snapshot={"result": "ok"},
-                        score_summary={"score": 1.0},
-                        started_at=datetime.now(timezone.utc),
-                        ended_at=datetime.now(timezone.utc),
-                    )
-                )
-            created_run.progress = 100
-            created_run.status = "completed"
-            created_run.ended_at = datetime.now(timezone.utc)
-            created_run.summary = f"已完成 {len(sample_ids)} 个样本"
-            self.run_repository.update(created_run)
-        return created_run
+        return self.run_repository.create(run)
 
     def list_runs(self, task_id: int | None = None, status: str | None = None) -> list[EvaluationRun]:
         return self.run_repository.list(task_id=task_id, status=status)

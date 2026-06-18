@@ -1,13 +1,23 @@
-import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
-import { App, Button, Form, Input, Modal, Space, Switch, Table, Typography } from "antd";
+import { DeleteOutlined, EditOutlined, PlusOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { App, Alert, Button, Form, Input, Modal, Select, Space, Switch, Table, Typography } from "antd";
 import { PageTableSkeleton } from "../components/PageTableSkeleton";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { createTarget, deleteTarget, listTargets, updateTarget } from "../api/api";
+import {
+  type AdapterPreset,
+  createTarget,
+  deleteTarget,
+  listTargetPresets,
+  listTargets,
+  testTarget,
+  updateTarget,
+} from "../api/api";
 import { isRequestAborted } from "../api/client";
 import type { EvaluationTarget } from "../api/types";
+
+const ADAPTER_TYPES = ["openai", "http_sse", "http_json", "claude_code", "mock"];
 import { useAbortableRequest } from "../hooks/useAbortableRequest";
 import { useLoadRequestId } from "../hooks/useLoadRequestId";
 
@@ -21,6 +31,62 @@ export function TargetsPage() {
   const [editing, setEditing] = useState<EvaluationTarget | null>(null);
   const [form] = Form.useForm();
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const [presets, setPresets] = useState<AdapterPreset[]>([]);
+  const [testing, setTesting] = useState(false);
+  const watchedAdapterType = Form.useWatch("adapter_type", form);
+
+  useEffect(() => {
+    listTargetPresets()
+      .then(setPresets)
+      .catch(() => undefined);
+  }, []);
+
+  const applyPreset = (label: string) => {
+    const p = presets.find((x) => x.label === label);
+    if (!p) return;
+    form.setFieldsValue({
+      adapter_type: p.adapter_type,
+      endpoint: p.endpoint,
+      adapter_config_json: JSON.stringify(p.config, null, 2),
+    });
+  };
+
+  const runTest = async () => {
+    const v = await form.validateFields(["adapter_type", "adapter_config_json"]);
+    let adapter_config: Record<string, unknown> = {};
+    try {
+      adapter_config = v.adapter_config_json ? JSON.parse(v.adapter_config_json as string) : {};
+    } catch {
+      message.error("adapter_config 不是合法 JSON");
+      return;
+    }
+    setTesting(true);
+    try {
+      const r = await testTarget({
+        adapter_type: v.adapter_type,
+        endpoint: form.getFieldValue("endpoint") ?? null,
+        adapter_config,
+      });
+      modal.info({
+        title: r.succeeded ? "连通成功 ✅" : "连通失败 ❌",
+        width: 560,
+        content: (
+          <div>
+            <p>耗时 {r.latency_ms}ms · tokens {r.total_tokens} · 工具调用 {r.tool_calls.length}</p>
+            {r.error ? (
+              <Alert type="error" message={r.error} />
+            ) : (
+              <Input.TextArea readOnly value={r.output_text} autoSize={{ minRows: 2, maxRows: 10 }} />
+            )}
+          </div>
+        ),
+      });
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const load = useCallback(async () => {
     const rid = nextLoadId();
@@ -51,8 +117,8 @@ export function TargetsPage() {
     form.resetFields();
     form.setFieldsValue({
       enabled: true,
-      adapter_type: "openapi_http",
-      adapter_config_json: JSON.stringify({ auth_type: "none", timeout_ms: 30000 }, null, 2),
+      adapter_type: "openai",
+      adapter_config_json: JSON.stringify({ base_url: "", api_key: "", model: "" }, null, 2),
     });
     setOpen(true);
   };
@@ -200,13 +266,36 @@ export function TargetsPage() {
         title={editing ? "编辑评测目标" : "新建评测目标"}
         open={open}
         onCancel={() => setOpen(false)}
-        onOk={() => void submit()}
         width={640}
         destroyOnClose
+        footer={[
+          <Button key="cancel" onClick={() => setOpen(false)}>
+            取消
+          </Button>,
+          <Button key="test" icon={<ThunderboltOutlined />} loading={testing} onClick={() => void runTest()}>
+            测试连通性
+          </Button>,
+          <Button key="ok" type="primary" onClick={() => void submit()}>
+            保存
+          </Button>,
+        ]}
       >
         <Form form={form} layout="vertical">
+          {!editing && (
+            <Form.Item label="快速预设" tooltip="选择后自动填充适配器类型、地址与配置">
+              <Select
+                placeholder="选择被测对象类型（如「我们的网页 Agent」/「OpenAI 兼容模型」）"
+                onChange={applyPreset}
+                options={presets.map((p) => ({ label: p.label, value: p.label }))}
+              />
+            </Form.Item>
+          )}
+          {(() => {
+            const hint = presets.find((p) => p.adapter_type === watchedAdapterType)?.hint;
+            return hint ? <Alert type="info" showIcon message={hint} style={{ marginBottom: 12 }} /> : null;
+          })()}
           <Form.Item name="target_type" label="目标类型" rules={[{ required: true }]}>
-            <Input placeholder="如 agent_http_api" />
+            <Input placeholder="如 agent_http_api / cli_agent" />
           </Form.Item>
           <Form.Item name="name" label="名称" rules={[{ required: true }]}>
             <Input />
@@ -221,7 +310,10 @@ export function TargetsPage() {
             <Input placeholder="https://..." />
           </Form.Item>
           <Form.Item name="adapter_type" label="适配器类型" rules={[{ required: true }]}>
-            <Input placeholder="openapi_http" />
+            <Select
+              options={ADAPTER_TYPES.map((t) => ({ label: t, value: t }))}
+              placeholder="选择适配器"
+            />
           </Form.Item>
           <Form.Item
             name="adapter_config_json"

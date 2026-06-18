@@ -5,6 +5,7 @@ from app.core.database import get_db
 from app.repositories.run_repository import RunRepository
 from app.schemas.common import PageResponse
 from app.schemas.run import EvaluationRunResponse, RunCancelResponse, RunCreate, RunSummaryResponse, SampleResultCreate, SampleResultResponse
+from app.services.evaluation.runner import launch_run
 from app.services.pagination_service import paginate
 from app.services.run_service.run_manager import RunManager
 
@@ -55,6 +56,19 @@ def delete_run(run_id: int, manager: RunManager = Depends(get_run_manager)):
     return {"message": "deleted"}
 
 
+@router.post("/{run_id}/start", response_model=RunCancelResponse)
+async def start_run(run_id: int, manager: RunManager = Depends(get_run_manager)):
+    """触发一个已创建（queued）运行的实际执行。"""
+    run = manager.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status not in {"queued", "failed", "cancelled"}:
+        raise HTTPException(status_code=400, detail=f"运行当前状态 {run.status}，无法启动")
+    if not launch_run(run_id):
+        raise HTTPException(status_code=409, detail="该运行正在执行中")
+    return RunCancelResponse(run_id=run.id, status="running", message="started")
+
+
 @router.post("/{run_id}/pause", response_model=RunCancelResponse)
 def pause_run(run_id: int, manager: RunManager = Depends(get_run_manager)):
     run = manager.pause_run(run_id)
@@ -72,11 +86,12 @@ def resume_run(run_id: int, manager: RunManager = Depends(get_run_manager)):
 
 
 @router.post("/{run_id}/retry", response_model=RunCancelResponse)
-def retry_run(run_id: int, manager: RunManager = Depends(get_run_manager)):
+async def retry_run(run_id: int, manager: RunManager = Depends(get_run_manager)):
     run = manager.retry_run(run_id)
     if run is None:
         raise HTTPException(status_code=400, detail="Run cannot be retried")
-    return RunCancelResponse(run_id=run.id, status=run.status, message="retried")
+    launch_run(run_id)
+    return RunCancelResponse(run_id=run.id, status="running", message="retried")
 
 
 @router.post("/{run_id}/cancel", response_model=RunCancelResponse)

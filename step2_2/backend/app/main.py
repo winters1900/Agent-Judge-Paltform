@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.analysis_api import router as analysis_router
 from app.api.dataset_api import router as dataset_router
@@ -11,16 +12,33 @@ from app.api.target_api import router as target_router
 from app.api.task_api import router as task_router
 from app.api.trace_api import router as trace_router
 from app.api.ws_api import router as ws_router
-from app.core.database import init_db
+from app.core.config import settings
+from app.core.database import SessionLocal, init_db
+from app.services.evaluation.seed import seed_defaults
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    if settings.eval_seed_defaults:
+        session = SessionLocal()
+        try:
+            seed_defaults(session)
+        finally:
+            session.close()
     yield
 
 
 app = FastAPI(title="通用 Agent 评估平台", version="0.1.0", lifespan=lifespan)
+
+# 前后端分离：开发期放开 CORS（生产应收敛为具体来源）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(target_router)
 app.include_router(task_router)
