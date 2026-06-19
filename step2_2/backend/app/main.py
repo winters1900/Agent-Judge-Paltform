@@ -14,6 +14,7 @@ from app.api.trace_api import router as trace_router
 from app.api.ws_api import router as ws_router
 from app.core.config import settings
 from app.core.database import SessionLocal, init_db
+from app.services.evaluation.runner import reconcile_orphaned_runs
 from app.services.evaluation.seed import seed_defaults
 
 
@@ -26,6 +27,8 @@ async def lifespan(app: FastAPI):
             seed_defaults(session)
         finally:
             session.close()
+    # 重启后把丢失了后台任务的非终态 run 收尾为 failed，避免永久卡在 running。
+    reconcile_orphaned_runs()
     yield
 
 

@@ -1,5 +1,5 @@
 ﻿import type { LlmClient } from '../llm-client/index.ts';
-import type { ChatMessage, AssistantMessage, ToolResultMessage, ToolCall, AgentEvent, FileDiff } from '../shared/types.ts';
+import type { ChatMessage, AssistantMessage, ToolResultMessage, ToolCall, AgentEvent, FileDiff, TokenUsage } from '../shared/types.ts';
 import type { ExternalMcpTool } from '../mcp-client/index.ts';
 import type { CommandConfirmHook } from '../tool-gateway/run-command.ts';
 import { enrichToolResult } from '../tool-gateway/tool-fallback.ts';
@@ -45,6 +45,7 @@ export type LoopResult = {
   filesModified: string[];
   fileChanges: FileDiff[];
   skillsUsed: string[];
+  usage: TokenUsage;
 };
 
 const MAX_ITERATIONS = 20;
@@ -71,16 +72,25 @@ function extractToolCalls(message: unknown): ToolCall[] {
   const msg = message as Record<string, unknown>;
   const raw = msg.tool_calls;
   if (!Array.isArray(raw)) return [];
+  // 保证每个 tool_call 的 id 非空且唯一：部分 OpenAI 兼容后端（如 DeepSeek）
+  // 偶发返回缺失或重复的 id，会让 assistant 声明的 tool_call 与后续 tool 结果消息
+  // 无法一一对应，下一轮请求被拒：「insufficient tool messages following tool_calls」。
+  const seen = new Set<string>();
   return raw
     .filter((c): c is Record<string, unknown> => !!c && typeof c === 'object')
-    .map((c) => ({
-      id: String(c.id ?? ''),
-      type: 'function' as const,
-      function: {
-        name: String((c.function as Record<string, unknown>)?.name ?? ''),
-        arguments: String((c.function as Record<string, unknown>)?.arguments ?? '{}'),
-      },
-    }));
+    .map((c, index) => {
+      let id = String(c.id ?? '').trim();
+      if (!id || seen.has(id)) id = `call_${index}`;
+      seen.add(id);
+      return {
+        id,
+        type: 'function' as const,
+        function: {
+          name: String((c.function as Record<string, unknown>)?.name ?? ''),
+          arguments: String((c.function as Record<string, unknown>)?.arguments ?? '{}'),
+        },
+      };
+    });
 }
 
 function toolSummary(result: unknown): string {
@@ -158,6 +168,7 @@ export function createExecutor(toolGateway: ToolGateway, externalMcpRegistry?: E
       const filesModified: string[] = [];
       const fileChanges: FileDiff[] = [];
       const skillsUsed: string[] = [];
+      const usage: TokenUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
       let finalContent = '';
       const maxIterations = options.maxIterations ?? MAX_ITERATIONS;
 
@@ -167,11 +178,19 @@ export function createExecutor(toolGateway: ToolGateway, externalMcpRegistry?: E
           tools: toolDefinitions,
           tool_choice: 'auto',
           parallel_tool_calls: false,
-        }) as { choices?: Array<{ message?: unknown; finish_reason?: string }> };
+        }) as {
+          choices?: Array<{ message?: unknown; finish_reason?: string }>;
+          usage?: Partial<TokenUsage>;
+        };
+
+        if (result?.usage) {
+          usage.prompt_tokens += Number(result.usage.prompt_tokens ?? 0);
+          usage.completion_tokens += Number(result.usage.completion_tokens ?? 0);
+          usage.total_tokens += Number(result.usage.total_tokens ?? 0);
+        }
 
         const choice = result?.choices?.[0];
         const rawMessage = (choice as Record<string, unknown> | undefined)?.message;
-        const finishReason = (choice as Record<string, unknown> | undefined)?.finish_reason;
 
         const content = extractText(rawMessage);
         const toolCalls = extractToolCalls(rawMessage);
@@ -189,7 +208,9 @@ export function createExecutor(toolGateway: ToolGateway, externalMcpRegistry?: E
           onEvent({ type: 'chunk', chunk: content });
         }
 
-        if (toolCalls.length === 0 || finishReason === 'stop') {
+        // 只要模型还在调用工具就继续循环；不能因 finish_reason==='stop' 提前 break，
+        // 否则会留下一条「带 tool_calls 但没有对应 tool 结果」的悬空 assistant 消息。
+        if (toolCalls.length === 0) {
           break;
         }
 
@@ -296,7 +317,9 @@ export function createExecutor(toolGateway: ToolGateway, externalMcpRegistry?: E
         }
       }
 
-      return { messages: loopMessages, finalContent, toolsUsed, filesModified, fileChanges, skillsUsed };
+      // total 缺失时回退为 prompt+completion，保证下游计量不为 0。
+      if (!usage.total_tokens) usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+      return { messages: loopMessages, finalContent, toolsUsed, filesModified, fileChanges, skillsUsed, usage };
     },
   };
 }

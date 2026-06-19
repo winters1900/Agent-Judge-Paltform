@@ -75,6 +75,13 @@ export function executeCommand(
     windowsHide: true,
   };
 
+  // Windows 上 npm/npx/yarn 等是 .cmd 包装器，execFile 不解析 PATHEXT 会报 ENOENT。
+  // 显式经 `cmd /c` 执行，让其按 PATHEXT 解析；相比 shell:true 不触发 DEP0190 且参数传递更确定。
+  // 命令安全校验已在上游拦掉 shell 元字符，args 均为干净 token。
+  const isWin = process.platform === 'win32';
+  const file = isWin ? (process.env.ComSpec || 'cmd.exe') : cmd;
+  const finalArgs = isWin ? ['/d', '/s', '/c', cmd, ...args] : args;
+
   return new Promise((resolve) => {
     let settled = false;
     const finish = (result: RunCommandResult) => {
@@ -85,8 +92,8 @@ export function executeCommand(
     };
 
     const child = execFile(
-      cmd,
-      args,
+      file,
+      finalArgs,
       options as Parameters<typeof execFile>[2],
       (error, stdout, stderr) => {
         const code =

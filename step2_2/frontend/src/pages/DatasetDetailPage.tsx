@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined, DeleteOutlined, PlusOutlined } from "@ant-design/icons";
+import { ArrowLeftOutlined, DeleteOutlined, PlusOutlined, UploadOutlined } from "@ant-design/icons";
 import { App, Button, Form, Input, Modal, Select, Space, Table, Typography } from "antd";
 import { PageTableSkeleton } from "../components/PageTableSkeleton";
 import type { ColumnsType } from "antd/es/table";
@@ -9,6 +9,7 @@ import {
   createDatasetSample,
   deleteDatasetSample,
   getDataset,
+  importDatasetSamples,
   listDatasetSamples,
 } from "../api/api";
 import { isRequestAborted } from "../api/client";
@@ -27,6 +28,82 @@ const SAMPLE_TYPES = [
   { value: "code_edit", label: "代码修改（示例）" },
 ];
 
+type SampleImportItem = {
+  sample_code: string;
+  sample_type: string;
+  input_payload: Record<string, unknown>;
+  expected_output?: Record<string, unknown> | null;
+  reference_context?: Record<string, unknown> | null;
+  ground_truth?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+const IMPORT_EXAMPLE = JSON.stringify(
+  [
+    {
+      sample_code: "case_all_tests_repair",
+      sample_type: "code_edit",
+      input_payload: {
+        prompt: "请修复当前项目中的所有失败测试。最后运行 npm test。",
+        selectedFile: null,
+      },
+      expected_output: { answer: "npm test 通过" },
+      ground_truth: {
+        keywords: ["npm test", "通过"],
+        tool_calls: [
+          { tool_name: "list_workspace" },
+          { tool_name: "read_file" },
+          { tool_name: "patch_file" },
+          { tool_name: "run_command" },
+        ],
+      },
+      reference_context: {
+        contexts: ["主要修改应位于 src 目录，不应删除或弱化测试。"],
+      },
+    },
+  ],
+  null,
+  2,
+);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseImportSamples(raw: string): SampleImportItem[] {
+  const parsed = JSON.parse(raw) as unknown;
+  const samples = Array.isArray(parsed)
+    ? parsed
+    : isRecord(parsed) && isRecord(parsed.input_payload)
+      ? [parsed]
+    : isRecord(parsed) && Array.isArray(parsed.samples)
+      ? parsed.samples
+      : null;
+  if (!samples) {
+    throw new Error("JSON 须为单个样本对象、样本数组，或 {\"samples\": [...]}");
+  }
+  return samples.map((sample, index) => {
+    if (!isRecord(sample)) {
+      throw new Error(`第 ${index + 1} 条不是对象`);
+    }
+    if (typeof sample.sample_code !== "string" || !sample.sample_code.trim()) {
+      throw new Error(`第 ${index + 1} 条缺少 sample_code`);
+    }
+    if (!isRecord(sample.input_payload)) {
+      throw new Error(`第 ${index + 1} 条缺少 input_payload 对象`);
+    }
+    return {
+      sample_code: sample.sample_code,
+      sample_type: typeof sample.sample_type === "string" ? sample.sample_type : "generic_qa",
+      input_payload: sample.input_payload,
+      expected_output: isRecord(sample.expected_output) ? sample.expected_output : null,
+      reference_context: isRecord(sample.reference_context) ? sample.reference_context : null,
+      ground_truth: isRecord(sample.ground_truth) ? sample.ground_truth : null,
+      metadata: isRecord(sample.metadata) ? sample.metadata : null,
+    };
+  });
+}
+
 export function DatasetDetailPage() {
   const { datasetId } = useParams();
   const id = Number(datasetId);
@@ -41,7 +118,9 @@ export function DatasetDetailPage() {
   const [pageSize, setPageSize] = useState(10);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [form] = Form.useForm();
+  const [importForm] = Form.useForm();
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
   const load = useCallback(async () => {
@@ -112,6 +191,31 @@ export function DatasetDetailPage() {
       message.success("样本已添加");
       setOpen(false);
       form.resetFields();
+      void load();
+    } catch (e) {
+      message.error((e as Error).message);
+    }
+  };
+
+  const submitImport = async () => {
+    const v = await importForm.validateFields();
+    let samplesToImport: SampleImportItem[];
+    try {
+      samplesToImport = parseImportSamples(v.samples_json);
+    } catch (e) {
+      message.error((e as Error).message);
+      return;
+    }
+    if (samplesToImport.length === 0) {
+      message.error("至少提供一条样本");
+      return;
+    }
+    try {
+      const created = await importDatasetSamples(id, samplesToImport);
+      message.success(`已导入 ${created.length} 条样本`);
+      setImportOpen(false);
+      importForm.resetFields();
+      setPage(1);
       void load();
     } catch (e) {
       message.error((e as Error).message);
@@ -190,6 +294,16 @@ export function DatasetDetailPage() {
         >
           添加样本
         </Button>
+        <Button
+          icon={<UploadOutlined />}
+          onClick={() => {
+            importForm.resetFields();
+            importForm.setFieldsValue({ samples_json: IMPORT_EXAMPLE });
+            setImportOpen(true);
+          }}
+        >
+          JSON 导入
+        </Button>
       </Space>
       {dataset && (
         <Typography.Paragraph>
@@ -224,7 +338,8 @@ export function DatasetDetailPage() {
         onCancel={() => setOpen(false)}
         onOk={() => void submitSample()}
         width={640}
-        destroyOnClose
+        destroyOnHidden
+        forceRender
       >
         <Form form={form} layout="vertical">
           <Form.Item name="sample_code" label="样本编码" rules={[{ required: true }]}>
@@ -247,6 +362,25 @@ export function DatasetDetailPage() {
           </Form.Item>
           <Form.Item name="metadata_json" label="metadata (JSON)">
             <Input.TextArea rows={2} placeholder="可选" />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Modal
+        title="JSON 导入样本"
+        open={importOpen}
+        onCancel={() => setImportOpen(false)}
+        onOk={() => void submitImport()}
+        okText="导入"
+        width={860}
+        destroyOnHidden
+        forceRender
+      >
+        <Typography.Paragraph type="secondary">
+          粘贴样本数组，或 {"{\"samples\": [...]}"}。每条至少包含 sample_code 和 input_payload。
+        </Typography.Paragraph>
+        <Form form={importForm} layout="vertical">
+          <Form.Item name="samples_json" label="样本 JSON" rules={[{ required: true }]}>
+            <Input.TextArea rows={18} className="ide-mono" />
           </Form.Item>
         </Form>
       </Modal>

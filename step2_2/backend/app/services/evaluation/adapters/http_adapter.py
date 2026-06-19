@@ -65,7 +65,10 @@ class HttpJsonAdapter(_BaseHttpAdapter):
         method, url, headers, body = self._request_args(input_payload)
         mapping = {**_DEFAULT_JSON_MAPPING, **(self.config.get("response_mapping") or {})}
         try:
-            async with httpx.AsyncClient(timeout=float(self.config.get("timeout_seconds", 120))) as client:
+            async with httpx.AsyncClient(
+                timeout=float(self.config.get("timeout_seconds", 120)),
+                trust_env=False,
+            ) as client:
                 resp = await client.request(method, url, headers=headers, json=body)
         except httpx.HTTPError as exc:
             return AgentResponse(succeeded=False, error=f"请求失败: {exc}", latency_ms=_ms(started))
@@ -115,7 +118,10 @@ class HttpSseAdapter(_BaseHttpAdapter):
         step = 0
 
         try:
-            async with httpx.AsyncClient(timeout=float(self.config.get("timeout_seconds", 180))) as client:
+            async with httpx.AsyncClient(
+                timeout=float(self.config.get("timeout_seconds", 180)),
+                trust_env=False,
+            ) as client:
                 async with client.stream(method, url, headers=headers, json=body) as resp:
                     if resp.status_code >= 400:
                         txt = (await resp.aread()).decode("utf-8", "replace")

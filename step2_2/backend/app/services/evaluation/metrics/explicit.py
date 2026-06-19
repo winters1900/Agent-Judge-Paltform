@@ -76,11 +76,14 @@ class TaskSuccessMetric(Metric):
         if expected:
             match_mode = self.config.get("match", "contains")
             success = answer == expected if match_mode == "exact" else expected in answer
-            return self._outcome(
-                value=1.0 if success else 0.0,
-                text="success" if success else "mismatch",
-                detail={"match": match_mode, "expected": ctx.expected_answer[:200]},
-            )
+            # 期望答案命中即成功；未命中时不直接判 0，按 docstring 的优先级链
+            # 继续尝试关键词匹配（期望答案多为简短范式句，难以成为自由文本回答的连续子串）。
+            if success or not keywords:
+                return self._outcome(
+                    value=1.0 if success else 0.0,
+                    text="success" if success else "mismatch",
+                    detail={"match": match_mode, "expected": ctx.expected_answer[:200]},
+                )
         if keywords:
             hit = [k for k in keywords if _normalize(k) in answer]
             success = len(hit) == len(keywords)

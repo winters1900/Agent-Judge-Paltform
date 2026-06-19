@@ -69,6 +69,7 @@ function sanitizeHistoryForNewRun(messages: ChatMessage[]): ChatMessage[] {
   const sanitized: ChatMessage[] = [];
   for (const message of messages) {
     if (message.role === 'tool') continue;
+    if (message.role === 'assistant' && message.tool_calls?.length) continue;
     if (message.role === 'assistant' && message.content === null) continue;
     sanitized.push(message);
   }
@@ -224,7 +225,7 @@ export function createAgentCore(
     await sessionStore.appendTaskSummary(sessionId, taskSummary);
 
     onEvent({ type: 'task_status', taskId, status: 'done' });
-    onEvent({ type: 'result', result: taskSummary });
+    onEvent({ type: 'result', result: taskSummary, usage: loopResult.usage });
 
     return taskSummary;
   }

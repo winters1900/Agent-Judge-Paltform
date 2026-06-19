@@ -64,41 +64,81 @@ export function ComparePage() {
     }
   };
 
+  type PerTask = {
+    task_id: number;
+    run_id: number | null;
+    run_code?: string;
+    metrics?: Record<string, number>;
+    note?: string;
+  };
+  type BestByMetric = Record<string, { task_id: number; value: number; lower_is_better: boolean }>;
+
   const detail = result?.result_detail as
     | {
-        task_run_summary?: { task_id: number; run_count: number }[];
-        average_score?: number | null;
-        run_count?: number;
-        sample_count?: number;
+        metric_keys?: string[];
+        per_task?: PerTask[];
+        best_by_metric?: BestByMetric;
+        lower_is_better?: string[];
       }
     | undefined;
 
+  const perTask = detail?.per_task ?? [];
+  const bestByMetric = detail?.best_by_metric ?? {};
+  // 后端给的指标键里，只保留至少有一个任务有数据的，避免选了无数据指标（如未配置 LLM 的 ragas）后整屏空白
+  const metricKeys = useMemo(
+    () => (detail?.metric_keys ?? []).filter((k) => perTask.some((t) => t.metrics && k in t.metrics)),
+    [detail?.metric_keys, perTask],
+  );
+  const metricName = useCallback(
+    (code: string) => metrics.find((m) => m.metric_code === code)?.name ?? code,
+    [metrics],
+  );
+
+  // 分组柱状图：x 轴=指标，每个任务一条系列
   const chartOption = useMemo(() => {
-    if (!detail?.task_run_summary || detail.task_run_summary.length === 0) return null;
+    if (metricKeys.length === 0 || perTask.length === 0) return null;
     return {
       tooltip: { trigger: "axis" },
+      legend: { data: perTask.map((t) => `任务 #${t.task_id}`) },
+      grid: { bottom: 80 },
       xAxis: {
         type: "category",
-        data: detail.task_run_summary.map((x) => `任务 #${x.task_id}`),
+        data: metricKeys.map((k) => metricName(k)),
+        axisLabel: { rotate: 30 },
       },
-      yAxis: { type: "value", name: "运行次数" },
-      series: [
-        {
-          name: "运行次数",
-          type: "bar",
-          data: detail.task_run_summary.map((x) => x.run_count),
-          itemStyle: { color: "#2c5282" },
-        },
-      ],
+      yAxis: { type: "value" },
+      series: perTask.map((t) => ({
+        name: `任务 #${t.task_id}`,
+        type: "bar",
+        data: metricKeys.map((k) => t.metrics?.[k] ?? 0),
+      })),
     };
-  }, [detail?.task_run_summary]);
+  }, [metricKeys, perTask, metricName]);
 
-  const summaryColumns: ColumnsType<{ task_id: number; run_count: number }> = useMemo(
+  // 对比表：每行一个指标，每个任务一列，标注最优任务
+  type CompareRow = { key: string; metric: string } & Record<string, number | string>;
+  const compareRows: CompareRow[] = useMemo(
+    () =>
+      metricKeys.map((k) => {
+        const row: CompareRow = { key: k, metric: metricName(k) };
+        for (const t of perTask) row[`task_${t.task_id}`] = t.metrics?.[k] ?? "—";
+        const best = bestByMetric[k];
+        row.best = best ? `任务 #${best.task_id}${best.lower_is_better ? "（越小越好）" : ""}` : "—";
+        return row;
+      }),
+    [metricKeys, perTask, bestByMetric, metricName],
+  );
+  const compareColumns: ColumnsType<CompareRow> = useMemo(
     () => [
-      { title: "任务 ID", dataIndex: "task_id" },
-      { title: "关联运行数", dataIndex: "run_count" },
+      { title: "指标", dataIndex: "metric", fixed: "left", width: 160 },
+      ...perTask.map((t) => ({
+        title: `任务 #${t.task_id}`,
+        dataIndex: `task_${t.task_id}`,
+        width: 120,
+      })),
+      { title: "最优", dataIndex: "best", width: 160 },
     ],
-    [],
+    [perTask],
   );
 
   return (
@@ -158,22 +198,28 @@ export function ComparePage() {
           </Typography.Text>
           <Space size="large" wrap>
             <Typography.Text>选中任务: {result.task_ids.join(", ")}</Typography.Text>
-            <Typography.Text>指标键: {result.metric_keys.join(", ") || "—"}</Typography.Text>
-            <Typography.Text>平均样本分: {detail?.average_score ?? "—"}</Typography.Text>
+            <Typography.Text>有效对比指标: {metricKeys.length}</Typography.Text>
             <Typography.Text>
-              运行总数: {detail?.run_count ?? "—"} / 样本条数: {detail?.sample_count ?? "—"}
+              有有效运行的任务: {perTask.filter((t) => t.run_id).length} / {perTask.length}
             </Typography.Text>
           </Space>
-          {chartOption && <ReactECharts style={{ height: 360 }} option={chartOption} />}
-          {detail?.task_run_summary && (
-            <Table
-              title={() => "各任务运行次数"}
-              rowKey="task_id"
-              columns={summaryColumns}
-              dataSource={detail.task_run_summary}
-              pagination={false}
-              size="small"
-            />
+          {metricKeys.length === 0 ? (
+            <Typography.Text type="warning">
+              所选任务的运行中没有可对比的指标数据（可能所选指标未产出，例如未配置 LLM 的 ragas/LLM-Judge 指标，或任务尚无已完成运行）。
+            </Typography.Text>
+          ) : (
+            <>
+              {chartOption && <ReactECharts style={{ height: 360 }} option={chartOption} />}
+              <Table
+                title={() => "各任务指标对比"}
+                rowKey="key"
+                columns={compareColumns}
+                dataSource={compareRows}
+                pagination={false}
+                size="small"
+                scroll={{ x: "max-content" }}
+              />
+            </>
           )}
         </Space>
       )}

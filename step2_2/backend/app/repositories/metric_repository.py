@@ -38,7 +38,26 @@ class MetricRepository(BaseRepository):
         return metric
 
     def list_results(self, run_id: int, sample_id: int | None = None) -> list[MetricResult]:
-        stmt = select(MetricResult).where(MetricResult.run_id == run_id)
+        # 关联指标定义，把 code/name/type 附到结果行上（MetricResult 仅存 metric_id），
+        # 否则前端图表只能回退显示 metric-{id}、表格的「指标/类型」列为空。
+        stmt = (
+            select(
+                MetricResult,
+                MetricDefinition.metric_code,
+                MetricDefinition.name,
+                MetricDefinition.metric_type,
+            )
+            .outerjoin(MetricDefinition, MetricDefinition.id == MetricResult.metric_id)
+            .where(MetricResult.run_id == run_id)
+            .order_by(MetricResult.sample_id, MetricResult.id)
+        )
         if sample_id is not None:
             stmt = stmt.where(MetricResult.sample_id == sample_id)
-        return list(self.session.scalars(stmt).all())
+        results: list[MetricResult] = []
+        for row in self.session.execute(stmt).all():
+            mr, code, name, mtype = row
+            mr.metric_code = code
+            mr.metric_name = name
+            mr.metric_type = mtype
+            results.append(mr)
+        return results

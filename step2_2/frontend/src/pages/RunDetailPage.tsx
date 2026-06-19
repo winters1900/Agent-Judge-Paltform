@@ -235,6 +235,12 @@ export function RunDetailPage() {
     () => [
       { title: "指标", dataIndex: "metric_name", render: (_, r) => r.metric_name || r.metric_code },
       { title: "类型", dataIndex: "metric_type", width: 100 },
+      {
+        title: "样本",
+        dataIndex: "sample_id",
+        width: 90,
+        render: (v: number | null) => (v == null ? <Tag>汇总</Tag> : `#${v}`),
+      },
       { title: "数值", dataIndex: "metric_value", width: 100 },
       { title: "文本", dataIndex: "metric_text", ellipsis: true },
     ],
@@ -281,19 +287,51 @@ export function RunDetailPage() {
 
   const metricChart = useMemo(() => {
     if (metrics.length === 0) return null;
+    // 按指标聚合：用样本级结果求均值（忽略空值与 run 级聚合行），每个指标只出一根柱
+    const buckets = new Map<string, { name: string; vals: number[] }>();
+    for (const m of metrics) {
+      if (m.sample_id == null || m.metric_value == null) continue;
+      const code = m.metric_code || `metric-${m.metric_id}`;
+      const name = m.metric_name || m.metric_code || `metric-${m.metric_id}`;
+      const b = buckets.get(code) ?? { name, vals: [] };
+      b.vals.push(Number(m.metric_value));
+      buckets.set(code, b);
+    }
+    const rows = [...buckets.values()].map((b) => ({
+      name: b.name,
+      value: b.vals.reduce((s, v) => s + v, 0) / b.vals.length,
+    }));
+    if (rows.length === 0) return null;
+    // 按量级拆双 y 轴：分数类(0~1，如成功率/准确率/F1)走左轴，量级类(ms/tokens)走右轴，
+    // 否则上万的 token/耗时会把 0~1 的分数柱压到看不见。
+    const isMagnitude = (v: number) => v > 5;
     return {
       tooltip: { trigger: "axis" },
+      legend: { data: ["分数 (0~1)", "量级 (ms/tokens)"] },
+      grid: { bottom: 90 },
       xAxis: {
         type: "category",
-        data: metrics.map((m) => m.metric_name || m.metric_code || `metric-${m.metric_id}`),
+        data: rows.map((r) => r.name),
         axisLabel: { rotate: 30 },
       },
-      yAxis: { type: "value" },
+      yAxis: [
+        { type: "value", name: "分数", min: 0, position: "left" },
+        { type: "value", name: "量级", min: 0, position: "right" },
+      ],
       series: [
         {
+          name: "分数 (0~1)",
           type: "bar",
-          data: metrics.map((m) => m.metric_value ?? 0),
+          yAxisIndex: 0,
+          data: rows.map((r) => (isMagnitude(r.value) ? null : Number(r.value.toFixed(4)))),
           itemStyle: { color: CHART_PRIMARY },
+        },
+        {
+          name: "量级 (ms/tokens)",
+          type: "bar",
+          yAxisIndex: 1,
+          data: rows.map((r) => (isMagnitude(r.value) ? Math.round(r.value) : null)),
+          itemStyle: { color: "#dd6b20" },
         },
       ],
     };

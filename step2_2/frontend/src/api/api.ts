@@ -311,6 +311,24 @@ export async function createDatasetSample(
   return data;
 }
 
+export async function importDatasetSamples(
+  datasetId: number,
+  samples: Array<{
+    sample_code: string;
+    sample_type: string;
+    input_payload: Record<string, unknown>;
+    expected_output?: Record<string, unknown> | null;
+    reference_context?: Record<string, unknown> | null;
+    ground_truth?: Record<string, unknown> | null;
+    metadata?: Record<string, unknown> | null;
+  }>,
+): Promise<DatasetSample[]> {
+  const { data } = await http.post<DatasetSample[]>(`/datasets/${datasetId}/samples/import`, {
+    samples,
+  });
+  return data;
+}
+
 export async function deleteDatasetSample(datasetId: number, sampleId: number): Promise<void> {
   await http.delete(`/datasets/${datasetId}/samples/${sampleId}`);
 }

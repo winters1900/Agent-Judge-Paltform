@@ -180,7 +180,7 @@ export function createOrchestrator(toolGateway: ToolGateway, executor: Executor,
         ], onEvent, hooks);
       } else if (classification.type === 'compound' && classification.subTasks?.length) {
         let carriedContext = '';
-        const combined: LoopResult = { messages: [], finalContent: '', toolsUsed: [], filesModified: [], fileChanges: [], skillsUsed: [] };
+        const combined: LoopResult = { messages: [], finalContent: '', toolsUsed: [], filesModified: [], fileChanges: [], skillsUsed: [], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
         const prefetch = await prefetchReferencedFiles(toolGateway, originalPrompt, workspaceFiles);
         workerTaskCount = prefetch.workerTaskCount;
         serialDurationMs = prefetch.serialDurationMs;
@@ -201,6 +201,9 @@ export function createOrchestrator(toolGateway: ToolGateway, executor: Executor,
           combined.filesModified.push(...result.filesModified);
           combined.fileChanges.push(...result.fileChanges);
           combined.skillsUsed.push(...(result.skillsUsed ?? []));
+          combined.usage.prompt_tokens += result.usage.prompt_tokens;
+          combined.usage.completion_tokens += result.usage.completion_tokens;
+          combined.usage.total_tokens += result.usage.total_tokens;
           combined.finalContent = result.finalContent;
         }
         loopResult = combined;

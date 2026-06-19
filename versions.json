@@ -1,1 +1,30 @@
-[]
+[
+  {
+    "id": "v1",
+    "name": "before-fix",
+    "description": "修复前的初始状态",
+    "snapshotPath": "snapshots/v1",
+    "createdAt": "2026-06-18T17:38:10.587Z"
+  },
+  {
+    "id": "v2",
+    "name": "before-fix",
+    "description": "修复前的快照",
+    "snapshotPath": "snapshots/v2",
+    "createdAt": "2026-06-18T18:06:48.656Z"
+  },
+  {
+    "id": "v3",
+    "name": "before-security-fix",
+    "description": "修复 security.js 之前的快照",
+    "snapshotPath": "snapshots/v3",
+    "createdAt": "2026-06-18T18:37:26.890Z"
+  },
+  {
+    "id": "v4",
+    "name": "before-security-fix",
+    "description": "修复 security.js 前的快照",
+    "snapshotPath": "snapshots/v4",
+    "createdAt": "2026-06-19T07:31:52.852Z"
+  }
+]

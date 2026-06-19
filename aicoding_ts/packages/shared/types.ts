@@ -159,9 +159,17 @@ export type ToolEvent = {
   detail?: string;
 };
 
+export type TokenUsage = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+};
+
 export type ResultEvent = {
   type: 'result';
   result: unknown;
+  // 整个任务累计的 token 消耗，供评估/计量侧采集（字段名对齐 OpenAI usage）。
+  usage?: TokenUsage;
 };
 
 export type ErrorEvent = {

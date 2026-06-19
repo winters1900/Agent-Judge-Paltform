@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile, readdir } from 'node:fs/promises';
 import { dirname, extname, join } from 'node:path';
 import { createAgentCore } from '../../packages/agent-core/index.ts';
+import type { ExecutorHooks } from '../../packages/agent-core/executor.ts';
 import { createContextBuilder } from '../../packages/context-builder/index.ts';
 import { createLlmClient } from '../../packages/llm-client/index.ts';
 import { createToolGateway } from '../../packages/tool-gateway/index.ts';
@@ -52,6 +53,9 @@ type ChatPayload = {
   prompt?: string;
   selectedFile?: string | null;
   sessionId?: string;
+  // 非交互模式（如自动化评估）：不挂确认通道，避免 agent 阻塞等待人工确认。
+  // 此时 ask_user 自动按确认处理，白名单命令照常执行，非白名单命令自动拒绝。
+  nonInteractive?: boolean;
 };
 
 type ConfirmPayload = {
@@ -847,7 +851,7 @@ export function startRuntimeServer() {
 
     // ── POST /api/agent/chat（主要 agent 接口，SSE）──
     if (url.pathname === '/api/agent/chat' && req.method === 'POST') {
-      const { prompt, selectedFile, sessionId: reqSessionId } = await parseBody<ChatPayload>(req);
+      const { prompt, selectedFile, sessionId: reqSessionId, nonInteractive } = await parseBody<ChatPayload>(req);
 
       const session = reqSessionId
         ? (await sessionStore.loadSession(reqSessionId) ?? await sessionStore.getOrCreateCurrentSession())
@@ -862,8 +866,14 @@ export function startRuntimeServer() {
       writeEvent({ type: 'session', sessionId: session.sessionId, isNew: false });
 
       const taskId = `task-${Date.now()}`;
-      const confirmHook = createConfirmHook(session.sessionId, taskId, writeEvent);
-      const commandConfirmHook = createCommandConfirmHook(session.sessionId, taskId, writeEvent);
+      // 非交互模式不挂确认通道：executor 会自动放行 ask_user，并对需确认的命令返回拒绝，
+      // 而不是发出确认请求后无限等待——避免自动化评估时整条流程假死在 SSE 上。
+      const hooks: ExecutorHooks = nonInteractive
+        ? {}
+        : {
+            onConfirm: createConfirmHook(session.sessionId, taskId, writeEvent),
+            onCommandConfirm: createCommandConfirmHook(session.sessionId, taskId, writeEvent),
+          };
 
       try {
         await agentCore.runTask(
@@ -871,7 +881,7 @@ export function startRuntimeServer() {
           prompt ?? '',
           selectedFile ?? null,
           writeEvent,
-          { onConfirm: confirmHook, onCommandConfirm: commandConfirmHook },
+          hooks,
         );
       } catch (error: unknown) {
         writeEvent({ type: 'error', message: error instanceof Error ? error.message : 'Unknown error' });
